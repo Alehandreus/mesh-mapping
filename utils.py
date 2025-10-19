@@ -8,6 +8,14 @@ def sample_points(sampler, batch_size, device):
     return pts
 
 
+@torch.no_grad()
+def point_query(traverser, points, device):
+    t = torch.zeros((points.size(0),), dtype=torch.float32, device=device)
+    closest_pts = torch.zeros((points.size(0), 3), dtype=torch.float32, device=device)
+    traverser.point_query(points, t, closest_pts)
+    return t, closest_pts
+
+
 def chamfer_distance(a, b):
     """Compute bidirectional Chamfer distance between two point clouds a and b.
     a: (N, 3)
