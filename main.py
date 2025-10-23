@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.autograd as autograd
+from PIL import Image
 from mesh_utils import Mesh, MeshSamplerMode, GPUMeshSampler
 from mesh_utils import GPUTraverser, CPUBuilder
 
@@ -28,17 +29,18 @@ def gradient_penalty(critic, real, fake, gp_lambda=10.0):
 
 
 def main():
-    fine_path = "models/queen_fine.fbx"
-    rough_path = "models/queen_rough.fbx"
+    fine_path = "models/monkey_fine.fbx"
+    rough_path = "models/monkey_rough2.fbx"
     batch_size = 100000
-    iters = 2000
+    iters = 10000
     transport_steps = 1
     critic_steps = 1
-    g_lr = 3e-4
+    g_lr = 1e-3
     d_lr = 1e-4
     gp_lambda = 0.0
-    id_lambda = 0.1
-    log_interval = 100
+    id_lambda = 10
+    area_lambda = 0
+    log_interval = 200
     chamfer_points = 10000
     save_points = 100000
     out_obj = "sampled_points.obj"
@@ -57,10 +59,17 @@ def main():
     fine_bvh = fine_builder.build_bvh(25)
     fine_traverser = GPUTraverser(fine_bvh)
 
+    vertices = fine_mesh.get_vertices()
+    faces = fine_mesh.get_faces()
+    area = 0.5 * np.linalg.norm(np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], 
+                                           vertices[faces[:, 2]] - vertices[faces[:, 0]]), 
+                                  axis=1).sum()
+    print("Area of fine mesh=", area)
+
     G = ResidualMap(rough_mesh).to(device)
     D = Critic(rough_mesh).to(device)
 
-    g_opt = torch.optim.Adam(G.parameters(), lr=g_lr)
+    g_opt = torch.optim.Adam(G.parameters(), lr=g_lr, weight_decay=0.0001)
     d_opt = torch.optim.Adam(D.parameters(), lr=d_lr)
 
     start = time.time()
@@ -91,10 +100,21 @@ def main():
 
             t, closest_pts = point_query(fine_traverser, x_fake, device)
             g_adv = (closest_pts - x_fake).abs().sum(dim=1).mean()
-
+            area = torch.tensor(0 ,device=device)
+            if area_lambda != 0:
+                vertices = rough_mesh.get_vertices()
+                faces = rough_mesh.get_faces()
+                vertices = torch.from_numpy(vertices).to(device)
+                faces = torch.from_numpy(faces.astype('int32')).to(device)
+                mapped_vertices = G(vertices)
+                
+                area= 0.5 * torch.linalg.norm(torch.cross(mapped_vertices[faces[:, 1]] - mapped_vertices[faces[:, 0]], 
+                                                             mapped_vertices[faces[:, 2]] - mapped_vertices[faces[:, 0]]), 
+                                                 dim=1).sum()
+                
             # g_adv = -D(x_fake).mean()
             g_id = ((x_fake - x_src) ** 2).mean()
-            g_loss = g_adv + id_lambda * g_id
+            g_loss = g_adv + id_lambda * g_id + area_lambda * area
             g_loss.backward()
             g_opt.step()
 
@@ -111,9 +131,13 @@ def main():
             mapped_vertices = G(vertices).detach().cpu().numpy()
             vertices = vertices.cpu().numpy()
 
+            area = 0.5 * np.linalg.norm(np.cross(mapped_vertices[faces[:, 1]] - mapped_vertices[faces[:, 0]], 
+                                                   mapped_vertices[faces[:, 2]] - mapped_vertices[faces[:, 0]]), 
+                                          axis=1).sum()
+            
             mesh_pred = Mesh.from_data(mapped_vertices, faces)
             mesh_pred.save_to_obj(f"mapped_mesh.obj")
-            mesh_pred.save_preview(f"mapped_mesh_preview.png")
+            mesh_pred.save_preview(f"mapped_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
 
             torch.save({"G": G.state_dict()}, ckpt)
 
@@ -128,7 +152,8 @@ def main():
             print(f"[it {it:05d}] g_loss={g_loss.item():.4f} "
                   f"g_id={g_id.item():.6f} "
                   f"chamfer={cd:.6f} time={elapsed:.2f}s "
-                  f"g_adv={g_adv.item():.5f}")
+                  f"g_adv={g_adv.item():.5f}", 
+                  f"area_loss={area.item():.5f}")
 
     # Save checkpoint
     torch.save({"G": G.state_dict(), "D": D.state_dict()}, ckpt)
@@ -158,6 +183,13 @@ def main():
             f.write(f"v {p[0]} {p[2]} {-p[1]}\n")
     print(f"Wrote {pred_points.shape[0]} vertices to {out_obj}")
 
+    fine_mesh.save_preview(f"fine_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
 
 if __name__ == "__main__":
     main()
+    fine_mesh_img = np.array(Image.open("fine_mesh_preview.png"))
+    mapped_mesh_img = np.array(Image.open("mapped_mesh_preview.png"))
+
+    mse = ((fine_mesh_img - mapped_mesh_img)**2).mean()
+    print('MSE=', mse)
+    print('PSNR=', np.log10(255 ** 2 / mse) * 10)
