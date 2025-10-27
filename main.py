@@ -4,10 +4,12 @@ import torch
 import torch.nn as nn
 import torch.autograd as autograd
 from PIL import Image
+
 from mesh_utils import Mesh, MeshSamplerMode, GPUMeshSampler
 from mesh_utils import GPUTraverser, CPUBuilder
+from mesh_utils import GPURayTracer
 
-from utils import sample_points, point_query, chamfer_distance
+from utils import sample_points, point_query, chamfer_distance, get_camera_rays
 from models import ResidualMap, Critic
 
 def gradient_penalty(critic, real, fake, gp_lambda=10.0):
@@ -29,28 +31,41 @@ def gradient_penalty(critic, real, fake, gp_lambda=10.0):
 
 
 def main():
+    # fine_path = "models/sphere_fine.fbx"
+    # rough_path = "models/sphere_rough_shell.fbx"
+    # fine_path = "models/queen_fine.fbx"
+    # rough_path = "models/queen_rough.fbx"
     fine_path = "models/monkey_fine.fbx"
     rough_path = "models/monkey_rough.fbx"
     batch_size = 100000
-    iters = 10000
+    iters = 2000
     transport_steps = 1
     critic_steps = 1
-    g_lr = 3e-4
+    g_lr = 1e-3
     d_lr = 1e-4
     gp_lambda = 0.0
-    id_lambda = 0.1
-    area_lambda = 0
+    id_lambda = 0.3
     log_interval = 100
     chamfer_points = 10000
     save_points = 100000
     out_obj = "sampled_points.obj"
     ckpt = "mapping.pt"
     device = "cuda"
+    img_size = 800
+    raytrace = True
+    load_ckpt = False
 
     rough_mesh = Mesh.from_file(rough_path)
     while len(rough_mesh.get_vertices()) < 1000000: # subdivide each primitive until we have enough vertices
         rough_mesh.split_faces(0.5)
     rough_sampler = GPUMeshSampler(rough_mesh, MeshSamplerMode.SURFACE_UNIFORM, max(batch_size, chamfer_points))
+
+    rough_mesh.save_preview(f"rough_mesh_preview.png", 512, 512, rough_mesh.get_c(), rough_mesh.get_R())
+
+    rough_builder = CPUBuilder(rough_mesh)
+    rough_bvh = rough_builder.build_bvh(25)
+    rough_ray_tracer = GPURayTracer(rough_bvh)
+    rough_traverser = GPUTraverser(rough_bvh)
 
     fine_mesh = Mesh.from_file(fine_path)
     fine_sampler = GPUMeshSampler(fine_mesh, MeshSamplerMode.SURFACE_UNIFORM, max(batch_size, chamfer_points))
@@ -59,39 +74,23 @@ def main():
     fine_bvh = fine_builder.build_bvh(25)
     fine_traverser = GPUTraverser(fine_bvh)
 
-    vertices = fine_mesh.get_vertices()
-    faces = fine_mesh.get_faces()
-    area = 0.5 * np.linalg.norm(np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], 
-                                           vertices[faces[:, 2]] - vertices[faces[:, 0]]), 
-                                  axis=1).sum()
-    print("Area of fine mesh=", area)
-
     G = ResidualMap(rough_mesh).to(device)
     D = Critic(rough_mesh).to(device)
 
-    g_opt = torch.optim.Adam(G.parameters(), lr=g_lr)
+    # Load checkpoint if exists
+    if load_ckpt:
+        checkpoint = torch.load(ckpt, map_location=device)
+        G.load_state_dict(checkpoint["G"])
+        D.load_state_dict(checkpoint["D"])
+        print(f"Loaded checkpoint from {ckpt}")
+
+    g_opt = torch.optim.AdamW(G.parameters(), lr=g_lr, weight_decay=1.0)
     d_opt = torch.optim.Adam(D.parameters(), lr=d_lr)
 
     start = time.time()
 
     print("Starting training...")
     for it in range(1, iters + 1):
-        # ---------------- Critic ----------------
-        # for _ in range(critic_steps):
-        #     x_src = sample_points(rough_sampler, batch_size, device)  # source samples
-        #     y_tgt = sample_points(fine_sampler, batch_size, device)   # target samples
-        #     with torch.no_grad():
-        #         x_fake = G(x_src)  # detached for critic update
-
-        #     d_opt.zero_grad(set_to_none=True)
-        #     d_real = D(y_tgt).mean()
-        #     d_fake = D(x_fake).mean()
-        #     wd = d_real - d_fake  # Wasserstein-1 estimate
-        #     gp = gradient_penalty(D, y_tgt, x_fake, gp_lambda=gp_lambda)
-        #     d_loss = d_fake - d_real
-        #     d_loss.backward()
-        #     d_opt.step()
-
         # ---------------- Generator (transport map) ----------------
         for _ in range(transport_steps):
             x_src = sample_points(rough_sampler, batch_size, device)
@@ -100,21 +99,10 @@ def main():
 
             t, closest_pts = point_query(fine_traverser, x_fake, device)
             g_adv = (closest_pts - x_fake).abs().sum(dim=1).mean()
-            area = torch.tensor(0 ,device=device)
-            if area_lambda != 0:
-                vertices = rough_mesh.get_vertices()
-                faces = rough_mesh.get_faces()
-                vertices = torch.from_numpy(vertices).to(device)
-                faces = torch.from_numpy(faces.astype('int32')).to(device)
-                mapped_vertices = G(vertices)
-                
-                area= 0.5 * torch.linalg.norm(torch.cross(mapped_vertices[faces[:, 1]] - mapped_vertices[faces[:, 0]], 
-                                                             mapped_vertices[faces[:, 2]] - mapped_vertices[faces[:, 0]]), 
-                                                 dim=1).sum()
-                
+
             # g_adv = -D(x_fake).mean()
             g_id = ((x_fake - x_src) ** 2).mean()
-            g_loss = g_adv + id_lambda * g_id + area_lambda * area
+            g_loss = g_adv + id_lambda * g_id
             g_loss.backward()
             g_opt.step()
 
@@ -131,13 +119,12 @@ def main():
             mapped_vertices = G(vertices).detach().cpu().numpy()
             vertices = vertices.cpu().numpy()
 
-            area = 0.5 * np.linalg.norm(np.cross(mapped_vertices[faces[:, 1]] - mapped_vertices[faces[:, 0]], 
-                                                   mapped_vertices[faces[:, 2]] - mapped_vertices[faces[:, 0]]), 
-                                          axis=1).sum()
-            
             mesh_pred = Mesh.from_data(mapped_vertices, faces)
             mesh_pred.save_to_obj(f"mapped_mesh.obj")
+
+            fine_mesh.save_preview(f"fine_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
             mesh_pred.save_preview(f"mapped_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
+            # mesh_pred.save_preview(f"mapped_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
 
             torch.save({"G": G.state_dict()}, ckpt)
 
@@ -152,8 +139,117 @@ def main():
             print(f"[it {it:05d}] g_loss={g_loss.item():.4f} "
                   f"g_id={g_id.item():.6f} "
                   f"chamfer={cd:.6f} time={elapsed:.2f}s "
-                  f"g_adv={g_adv.item():.5f}", 
-                  f"area_loss={area.item():.5f}")
+                  f"g_adv={g_adv.item():.5f}")
+        
+    if raytrace:
+        cam_poses, dirs = get_camera_rays(fine_mesh, img_size=img_size, device=device)
+        dirs = dirs / dirs.norm(dim=1, keepdim=True)
+        mask, t, normals = rough_ray_tracer.trace(cam_poses, dirs)
+        pts = cam_poses + dirs * t[:, None]
+        # t_sdf, sdf_pts = point_query(fine_traverser, pts, device)
+
+        # pts = pts.double()
+        # dirs = dirs.double()
+        # cam_poses = cam_poses.double()
+        
+        epochs = 50
+        pts = nn.Parameter(pts[mask], requires_grad=True)
+        # optim = torch.optim.Adam([pts], lr=1e-1)
+        optim = torch.optim.LBFGS([pts], lr=3, max_iter=30, line_search_fn='strong_wolfe')
+        scheduler = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1.0, end_factor=0.1, total_iters=epochs)
+
+        pts_mapped = G(pts)
+        loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1).mean()
+        print("Loss:", loss.item())
+
+        for _ in range(epochs):
+            with torch.no_grad():
+                t_sdf, sdf_pts = point_query(rough_traverser, pts.data, device)
+                pts.data = sdf_pts
+
+            # t_sdf, sdf_pts = point_query(rough_traverser, pts, device)
+            # distance from point to ray dir
+            pts_mapped = G(pts)
+            loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1).mean()
+            print("Loss:", loss.item())
+
+            def closure():
+                optim.zero_grad()
+                pts_mapped = G(pts)
+                loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1).mean()
+                loss.backward()
+                return loss
+
+            optim.zero_grad()
+            loss.backward()
+            # optim.step()
+            optim.step(closure)
+            # scheduler.step()
+
+        with torch.no_grad():
+            t_sdf, sdf_pts = point_query(rough_traverser, pts.data, device)
+            pts.data = sdf_pts
+
+        threshold = 0.01
+
+        pts_mapped = G(pts)
+        loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1)
+
+        # save heatmap of loss
+        with torch.no_grad():
+            heatmap = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
+            heatmap[mask] = loss
+            heatmap = heatmap.cpu().numpy()
+            heatmap = heatmap.reshape(img_size, img_size)
+            heatmap = heatmap / heatmap.max()
+            heatmap = np.sqrt(1 - np.square(1 - heatmap))
+            image = Image.fromarray((heatmap * 255).astype(np.uint8))
+            image.save('loss_heatmap.png')
+
+        m = mask.clone()[mask]
+        m[loss >= threshold] = False
+        mask[mask.clone()] = m            
+
+        # save distance from mapped points to camera
+        with torch.no_grad():
+            dist_map = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
+            dist_map[mask] = (pts_mapped[m] - cam_poses[mask]).norm(dim=1)
+            mmin = dist_map[dist_map > 0].min()
+            mmax = dist_map.max()
+            dist_map = (dist_map - mmin) / (mmax - mmin)
+            dist_map[~mask] = 1.0
+            dist_map = 1 - dist_map
+            dist_map = dist_map.cpu().numpy()
+            dist_map = dist_map.reshape(img_size, img_size)
+            image = Image.fromarray((dist_map * 255).astype(np.uint8))
+            image.save('distance_map.png')
+
+        mask_img = mask.reshape(img_size, img_size)
+        mask_img = mask_img.cpu().numpy()
+        normals = normals.cpu().numpy()
+        t_sdf, sdf_pts = point_query(fine_traverser, pts_mapped, device)
+        # t = t.cpu().numpy()
+        t = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
+
+        print(t.min(), t.max())
+
+        t[mask] = 1.0
+        t = t.cpu().numpy()
+
+        light_dir = np.array([1, -1, 1])
+        light_dir = light_dir / np.linalg.norm(light_dir)
+
+        normals[np.isnan(normals)] = 0
+        colors = t
+
+        img = colors.reshape(img_size, img_size)
+        img[~mask_img] = 0
+
+        img = img / img.max()
+
+        image = Image.fromarray((img * 255).astype(np.uint8))
+        image.save('output.png')
+
 
     # Save checkpoint
     torch.save({"G": G.state_dict(), "D": D.state_dict()}, ckpt)
@@ -183,13 +279,6 @@ def main():
             f.write(f"v {p[0]} {p[2]} {-p[1]}\n")
     print(f"Wrote {pred_points.shape[0]} vertices to {out_obj}")
 
-    fine_mesh.save_preview(f"fine_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
 
 if __name__ == "__main__":
     main()
-    fine_mesh_img = np.array(Image.open("fine_mesh_preview.png"))
-    mapped_mesh_img = np.array(Image.open("mapped_mesh_preview.png"))
-
-    mse = ((fine_mesh_img - mapped_mesh_img)**2).mean()
-    print('MSE=', mse)
-    print('PSNR=', np.log10(255 ** 2 / mse) * 10)
