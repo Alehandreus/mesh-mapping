@@ -30,17 +30,17 @@ def gradient_penalty(critic, real, fake, gp_lambda=10.0):
 
 def main():
     fine_path = "models/monkey_fine.fbx"
-    rough_path = "models/monkey_rough2.fbx"
+    rough_path = "models/monkey_rough.fbx"
     batch_size = 100000
     iters = 10000
     transport_steps = 1
     critic_steps = 1
-    g_lr = 1e-3
+    g_lr = 3e-4
     d_lr = 1e-4
     gp_lambda = 0.0
-    id_lambda = 10
+    id_lambda = 0.1
     area_lambda = 0
-    log_interval = 200
+    log_interval = 100
     chamfer_points = 10000
     save_points = 100000
     out_obj = "sampled_points.obj"
@@ -69,7 +69,7 @@ def main():
     G = ResidualMap(rough_mesh).to(device)
     D = Critic(rough_mesh).to(device)
 
-    g_opt = torch.optim.Adam(G.parameters(), lr=g_lr, weight_decay=0.0001)
+    g_opt = torch.optim.Adam(G.parameters(), lr=g_lr)
     d_opt = torch.optim.Adam(D.parameters(), lr=d_lr)
 
     start = time.time()
