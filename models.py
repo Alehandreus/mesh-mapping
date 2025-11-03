@@ -31,16 +31,17 @@ class ResidualMap(nn.Module):
         }
 
         self.n_input_dims = 3
-        self.encoding = TensoRFEncoder(mesh)
+        self.encoding = VertexEncoder(mesh)
+        # self.encoding = TensoRFEncoder(mesh)
         # self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
         self.n_encoder_dims = self.encoding.n_output_dims    
         self.n_output_dims = 3
 
         self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        x_enc = self.encoding(x).float()
+        x_enc = self.encoding(x, **kwargs).float()
         delta = self.network(x_enc)
         y = x + delta
         y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
@@ -79,7 +80,7 @@ class Critic(nn.Module):
 
         self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)        
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
         x_enc = self.encoding(x).float()
         out = self.network(x_enc).squeeze(-1)
@@ -129,9 +130,40 @@ class TensoRFEncoder(nn.Module):
 
         return (plane_feats * line_feats).T
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         return self.compute_appfeature(x)
-        # a = self.encoder.compute_appfeature(x)
-        return a
-        # print(a.shape)
-        # exit()
+    
+
+class VertexEncoder(nn.Module):
+    def __init__(self, mesh):
+        super().__init__()
+
+        self.emb_size = 32
+        self.n_output_dims = self.emb_size
+
+        self.n_vertices = mesh.get_num_vertices()
+        self.embeddings = nn.Embedding(self.n_vertices, self.emb_size)
+        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
+
+        self.faces = mesh.get_faces()
+        self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
+        # print(self.faces.shape)
+
+    def forward(self, x, face_idxs, barycentrics):
+        v0_idxs = self.faces[face_idxs, 0]
+        v1_idxs = self.faces[face_idxs, 1]
+        v2_idxs = self.faces[face_idxs, 2]
+
+        v0_emb = self.embeddings(v0_idxs)
+        v1_emb = self.embeddings(v1_idxs)
+        v2_emb = self.embeddings(v2_idxs)
+
+        # print(v0_emb.shape, barycentrics.shape)
+
+        emb = (barycentrics[:, 0, None] * v0_emb +
+               barycentrics[:, 1, None] * v1_emb +
+               barycentrics[:, 2, None] * v2_emb)
+        
+        # print(emb.shape)
+
+        return emb

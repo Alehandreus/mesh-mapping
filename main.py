@@ -55,24 +55,26 @@ def main():
     raytrace = True
     load_ckpt = False
 
+    rough_mesh_split = Mesh.from_file(rough_path)
+    while len(rough_mesh_split.get_vertices()) < 1000000: # subdivide each primitive until we have enough vertices
+        rough_mesh_split.split_faces(0.5)
+
     rough_mesh = Mesh.from_file(rough_path)
-    while len(rough_mesh.get_vertices()) < 1000000: # subdivide each primitive until we have enough vertices
-        rough_mesh.split_faces(0.5)
     rough_sampler = GPUMeshSampler(rough_mesh, MeshSamplerMode.SURFACE_UNIFORM, max(batch_size, chamfer_points))
-
-    rough_mesh.save_preview(f"rough_mesh_preview.png", 512, 512, rough_mesh.get_c(), rough_mesh.get_R())
-
     rough_builder = CPUBuilder(rough_mesh)
     rough_bvh = rough_builder.build_bvh(25)
-    rough_ray_tracer = GPURayTracer(rough_bvh)
+    # rough_mesh = Mesh.from_data(rough_bvh.get_vertices(), rough_bvh.get_faces())
     rough_traverser = GPUTraverser(rough_bvh)
+    rough_ray_tracer = GPURayTracer(rough_bvh)
 
     fine_mesh = Mesh.from_file(fine_path)
     fine_sampler = GPUMeshSampler(fine_mesh, MeshSamplerMode.SURFACE_UNIFORM, max(batch_size, chamfer_points))
-
     fine_builder = CPUBuilder(fine_mesh)
     fine_bvh = fine_builder.build_bvh(25)
+    # fine_mesh = Mesh.from_data(fine_bvh.get_vertices(), fine_bvh.get_faces())
     fine_traverser = GPUTraverser(fine_bvh)
+
+    rough_mesh.save_preview(f"rough_mesh_preview.png", 512, 512, rough_mesh.get_c(), rough_mesh.get_R())
 
     G = ResidualMap(rough_mesh).to(device)
     D = Critic(rough_mesh).to(device)
@@ -93,12 +95,12 @@ def main():
     for it in range(1, iters + 1):
         # ---------------- Generator (transport map) ----------------
         for _ in range(transport_steps):
-            x_src = sample_points(rough_sampler, batch_size, device)
+            x_src, barycentrics, face_idxs = sample_points(rough_sampler, batch_size, device)
             g_opt.zero_grad(set_to_none=True)
-            x_fake = G(x_src)
+            x_fake = G(x=x_src, barycentrics=barycentrics, face_idxs=face_idxs)
 
-            t, closest_pts = point_query(fine_traverser, x_fake, device)
-            g_adv = (closest_pts - x_fake).abs().sum(dim=1).mean()
+            sdf_t, sdf_closest_pts, _, _ = point_query(fine_traverser, x_fake, device)
+            g_adv = (sdf_closest_pts - x_fake).abs().sum(dim=1).mean()
 
             # g_adv = -D(x_fake).mean()
             g_id = ((x_fake - x_src) ** 2).mean()
@@ -107,34 +109,43 @@ def main():
             g_opt.step()
 
         if it % log_interval == 0:
-            points_true = sample_points(fine_sampler, chamfer_points, device)
-            points_mapped = sample_points(rough_sampler, chamfer_points, device)
-            points_mapped = G(points_mapped)
+            points_true, _, _ = sample_points(fine_sampler, chamfer_points, device)
+
+            points_mapped, barycentrics_mapped, face_idxs_mapped = sample_points(rough_sampler, chamfer_points, device)
+            # print(barycentrics_mapped[:4], face_idxs_mapped[:4])
+            # t, points_mapped, barycentrics_mapped, face_idxs_mapped = point_query(rough_traverser, points_mapped, device)
+            # print(barycentrics_mapped[:4], face_idxs_mapped[:4])
+            points_mapped = G(x=points_mapped, barycentrics=barycentrics_mapped, face_idxs=face_idxs_mapped)
             cd = chamfer_distance(points_true, points_mapped).item()
+
+            # Write OBJ with vertices
+            with open(out_obj, "w") as f:
+                for p in points_mapped:
+                    f.write(f"v {p[0]} {p[2]} {-p[1]}\n")            
+
+            fine_vertices = fine_mesh.get_vertices()
+            fine_vertices = torch.from_numpy(fine_vertices).float().to(device)
+            sdf_t, sdf_closests, sdf_barycentrics, sdf_face_idxs = point_query(rough_traverser, fine_vertices, device)
             
-            vertices = rough_mesh.get_vertices()
-            faces = rough_mesh.get_faces()
+            vertices = rough_mesh_split.get_vertices()
+            faces = rough_mesh_split.get_faces()
 
             vertices = torch.from_numpy(vertices).to(device)
-            mapped_vertices = G(vertices).detach().cpu().numpy()
+            mapped_vertices = G(x=sdf_closests, barycentrics=sdf_barycentrics, face_idxs=sdf_face_idxs).detach().cpu().numpy()
             vertices = vertices.cpu().numpy()
 
-            mesh_pred = Mesh.from_data(mapped_vertices, faces)
+            mesh_pred = Mesh.from_data(mapped_vertices, fine_mesh.get_faces())
+            mesh_pred = Mesh.from_data(mapped_vertices, fine_mesh.get_faces())
             mesh_pred.save_to_obj(f"mapped_mesh.obj")
 
             fine_mesh.save_preview(f"fine_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
             mesh_pred.save_preview(f"mapped_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
-            # mesh_pred.save_preview(f"mapped_mesh_preview.png", 512, 512, fine_mesh.get_c(), fine_mesh.get_R())
 
             torch.save({"G": G.state_dict()}, ckpt)
 
             end = time.time()
             elapsed = end - start
             start = end
-
-            # print(f"[it {it:05d}] d_loss={d_loss.item():.4f} g_loss={g_loss.item():.4f} "
-            #       f"wd={wd.item():.4f} gp={gp.item():.4f} g_id={g_id.item():.6f} "
-            #       f"chamfer={cd:.6f} time={elapsed:.2f}s")
 
             print(f"[it {it:05d}] g_loss={g_loss.item():.4f} "
                   f"g_id={g_id.item():.6f} "
@@ -164,7 +175,7 @@ def main():
 
         for _ in range(epochs):
             with torch.no_grad():
-                t_sdf, sdf_pts = point_query(rough_traverser, pts.data, device)
+                t_sdf, sdf_pts, sdf_barycentrics, sdf_face_idxs = point_query(rough_traverser, pts.data, device)
                 pts.data = sdf_pts
 
             # t_sdf, sdf_pts = point_query(rough_traverser, pts, device)
@@ -187,7 +198,7 @@ def main():
             # scheduler.step()
 
         with torch.no_grad():
-            t_sdf, sdf_pts = point_query(rough_traverser, pts.data, device)
+            t_sdf, sdf_pts, sdf_barycentrics, sdf_face_idxs = point_query(rough_traverser, pts.data, device)
             pts.data = sdf_pts
 
         threshold = 0.01
