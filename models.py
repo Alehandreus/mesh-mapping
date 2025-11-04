@@ -31,8 +31,8 @@ class ResidualMap(nn.Module):
         }
 
         self.n_input_dims = 3
-        self.encoding = VertexEncoder(mesh)
-        # self.encoding = TensoRFEncoder(mesh)
+        #self.encoding = VertexEncoder(mesh)
+        self.encoding = TensoRFEncoder(mesh)
         # self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
         self.n_encoder_dims = self.encoding.n_output_dims    
         self.n_output_dims = 3
@@ -105,7 +105,7 @@ class TensoRFEncoder(nn.Module):
             ], dtype=torch.float32, device='cuda'),
             device='cuda',
 
-            gridSize=[128] * 3,
+            gridSize=[32] * 3,
             appearance_n_comp=4,
             density_n_comp=1,
         )
