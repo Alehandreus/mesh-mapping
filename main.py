@@ -35,8 +35,10 @@ def main():
     # rough_path = "models/sphere_rough_shell.fbx"
     # fine_path = "models/queen_fine.fbx"
     # rough_path = "models/queen_rough.fbx"
-    fine_path = "models/monkey_fine.fbx"
-    rough_path = "models/monkey_rough.fbx"
+    # fine_path = "models/monkey_fine.fbx"
+    # rough_path = "models/monkey_rough.fbx"
+    fine_path = "models/petmonster_fine.fbx"
+    rough_path = "models/petmonster_rough.fbx"
     batch_size = 100000
     iters = 2000
     transport_steps = 1
@@ -101,6 +103,8 @@ def main():
 
             sdf_t, sdf_closest_pts, _, _ = point_query(fine_traverser, x_fake, device)
             g_adv = (sdf_closest_pts - x_fake).abs().sum(dim=1).mean()
+            
+            # print(sdf_closest_pts)
 
             # g_adv = -D(x_fake).mean()
             g_id = ((x_fake - x_src) ** 2).mean()
@@ -238,7 +242,7 @@ def main():
         mask_img = mask.reshape(img_size, img_size)
         mask_img = mask_img.cpu().numpy()
         normals = normals.cpu().numpy()
-        t_sdf, sdf_pts = point_query(fine_traverser, pts_mapped, device)
+        t_sdf, sdf_pts, sdf_barycentrics, sdf_idxs = point_query(fine_traverser, pts_mapped, device)
         # t = t.cpu().numpy()
         t = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
 
@@ -256,6 +260,13 @@ def main():
         img = colors.reshape(img_size, img_size)
         img[~mask_img] = 0
 
+        # print(img.min(), img.max())
+
+        # plot histogram of img values
+        import matplotlib.pyplot as plt
+        plt.hist(img.flatten(), bins=100)
+        plt.show()
+
         img = img / img.max()
 
         image = Image.fromarray((img * 255).astype(np.uint8))
@@ -267,22 +278,22 @@ def main():
     print(f"Saved checkpoint to {ckpt}")
 
     # Save mapped points from a larger rough sample
-    with torch.no_grad():
-        n = save_points
-        rough_sampler = GPUMeshSampler(rough_mesh, MeshSamplerMode.SURFACE_UNIFORM, n)
-        pts = torch.zeros((n, 3), dtype=torch.float32, device=device)
-        # sample in chunks to avoid very large temporary tensors
-        chunk = n
-        out = []
-        done = 0
-        while done < n:
-            bs = min(chunk, n - done)
-            buf = torch.zeros((bs, 3), dtype=torch.float32, device=device)
-            rough_sampler.sample(buf, bs)
-            pred = G(buf)
-            out.append(pred)
-            done += bs
-        pred_points = torch.cat(out, dim=0)
+    # with torch.no_grad():
+    #     n = save_points
+    #     rough_sampler = GPUMeshSampler(rough_mesh, MeshSamplerMode.SURFACE_UNIFORM, n)
+    #     pts = torch.zeros((n, 3), dtype=torch.float32, device=device)
+    #     # sample in chunks to avoid very large temporary tensors
+    #     chunk = n
+    #     out = []
+    #     done = 0
+    #     while done < n:
+    #         bs = min(chunk, n - done)
+    #         buf = torch.zeros((bs, 3), dtype=torch.float32, device=device)
+    #         rough_sampler.sample(buf, bs)
+    #         pred = G(buf)
+    #         out.append(pred)
+    #         done += bs
+    #     pred_points = torch.cat(out, dim=0)
 
     # Write OBJ with vertices
     with open(out_obj, "w") as f:
