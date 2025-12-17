@@ -39,8 +39,8 @@ def main():
     # rough_path = "models/monkey_rough.fbx"
 
     fine_path = "models/petmonster_orig.fbx"
-    rough_path = "models/petmonster_outer_1000.fbx"
-    # rough_path = "models/petmonster_inner_1000.fbx"
+    # rough_path = "models/petmonster_outer_1000.fbx"
+    rough_path = "models/petmonster_inner_1000.fbx"
     # rough_path = "models/petmonster_rough.fbx"
 
     # fine_path = "models/monkey_126290.fbx"
@@ -160,130 +160,110 @@ def main():
     pts_gt = point_query(fine_traverser, pts, device)[1]
     # write_pairs_as_obj(pts, pts_mapped, "mapped_points.obj")
     write_triples_as_obj(pts, pts_mapped, pts_gt, "mapped_points.obj")
+
+    def get_raytrace_loss(cam_poses, dirs, y, reduction='mean'):
+        if reduction == 'mean':
+            return torch.cross(y - cam_poses, dirs, dim=1).norm(dim=1).mean()
+        return torch.cross(y - cam_poses, dirs, dim=1).norm(dim=1)    
+
+    def do_raytrace(cam_poses, dirs, traverser, G, x0, verbose=False):
+        """
+            x -- points on rough mesh surface (optimized)
+            y = G(x) -- mapped points on fine mesh surface
+        """
+
+        epochs = 10
+        # threshold = 0.04
+        threshold = np.inf
+
+        x = nn.Parameter(x0, requires_grad=True)
+        optim = torch.optim.LBFGS([x], lr=1e-1, max_iter=30, line_search_fn='strong_wolfe')
+        
+        if verbose:
+            loss = get_raytrace_loss(cam_poses, dirs, G(x))
+            print("Initial loss:", loss.item())
+
+        for _ in range(epochs):
+            with torch.no_grad():
+                _, sdf_closest_pts, _, _ = point_query(traverser, x.data, device)
+                x.data = sdf_closest_pts
+
+            def closure():
+                optim.zero_grad()
+                y = G(x)
+                loss = get_raytrace_loss(cam_poses, dirs, y)
+                loss.backward()
+                return loss
+
+            optim.step(closure)
+
+            if verbose:
+                loss = get_raytrace_loss(cam_poses, dirs, G(x))
+                print("Loss:", loss.item())
+
+        x1 = x.data.detach()
+        y1 = G(x1).detach()
+
+        loss = get_raytrace_loss(cam_poses, dirs, y1, reduction='none')
+        accepted_mask = loss < threshold
+
+        normals = (x1 - y1)
+        normals = normals / normals.norm(dim=1, keepdim=True)
+
+        return x1, y1, accepted_mask, normals
+
+    G.eval()
         
     if raytrace:
         cam_poses, dirs = get_camera_rays(fine_mesh, img_size=img_size, device=device)
         dirs = dirs / dirs.norm(dim=1, keepdim=True)
-        mask, t, normals = rough_ray_tracer.trace(cam_poses, dirs)
-        pts = cam_poses + dirs * t[:, None]
-        # t_sdf, sdf_pts = point_query(fine_traverser, pts, device)
+        initial_mask, t, normals = rough_ray_tracer.trace(cam_poses, dirs)
+        x0 = cam_poses + dirs * t[:, None]
 
-        # pts = pts.double()
-        # dirs = dirs.double()
-        # cam_poses = cam_poses.double()
-        
-        epochs = 10
-        pts = nn.Parameter(pts[mask], requires_grad=True)
-        # optim = torch.optim.Adam([pts], lr=1e-1)
-        optim = torch.optim.LBFGS([pts], lr=3, max_iter=30, line_search_fn='strong_wolfe')
-        scheduler = torch.optim.lr_scheduler.LinearLR(optim, start_factor=1.0, end_factor=0.1, total_iters=epochs)
-
-        pts_mapped = G(pts)
-        loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1).mean()
-        print("Loss:", loss.item())
-
-        for _ in range(epochs):
-            with torch.no_grad():
-                t_sdf, sdf_pts, sdf_barycentrics, sdf_face_idxs = point_query(rough_traverser, pts.data, device)
-                pts.data = sdf_pts
-
-            pts_mapped = G(pts)
-            loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1).mean()
-            print("Loss:", loss.item())
-
-            def closure():
-                optim.zero_grad()
-                pts_mapped = G(pts)
-                loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1).mean()
-                loss.backward()
-                return loss
-
-            optim.zero_grad()
-            loss.backward()
-            optim.step(closure)
-
-        with torch.no_grad():
-            t_sdf, sdf_pts, sdf_barycentrics, sdf_face_idxs = point_query(rough_traverser, pts.data, device)
-            pts.data = sdf_pts
-
-        threshold = 0.01
-        # threshold = 1
-
-        pts_mapped = G(pts)
-        loss = torch.cross(pts_mapped - cam_poses[mask], dirs[mask], dim=1).norm(dim=1)
+        x1, y1, accepted_mask, normals = do_raytrace(cam_poses[initial_mask], dirs[initial_mask], rough_traverser, G, x0[initial_mask], verbose=True)
+        combined_mask = initial_mask.clone()
+        combined_mask[initial_mask] = accepted_mask
 
         # save heatmap of loss
         with torch.no_grad():
             heatmap = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
-            heatmap[mask] = loss
+            loss = get_raytrace_loss(cam_poses[initial_mask], dirs[initial_mask], G(y1), reduction='none')
+            heatmap[initial_mask] = loss
+            mmin = heatmap[heatmap > 0].min()
+            mmax = heatmap.max()
+            heatmap = (heatmap - mmin) / (mmax - mmin)
+            heatmap[~initial_mask] = 1.0
+            heatmap = 1 - heatmap
             heatmap = heatmap.cpu().numpy()
             heatmap = heatmap.reshape(img_size, img_size)
-            heatmap = heatmap / heatmap.max()
-            heatmap = np.sqrt(1 - np.square(1 - heatmap))
             image = Image.fromarray((heatmap * 255).astype(np.uint8))
             image.save('loss_heatmap.png')
-
-        m = mask.clone()[mask]
-        m[loss >= threshold] = False
-        mask[mask.clone()] = m            
-
-        # save distance from mapped points to camera
+        
+        # save distance map
         with torch.no_grad():
             dist_map = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
-            dist_map[mask] = (pts_mapped[m] - cam_poses[mask]).norm(dim=1)
+            dist_map[combined_mask] = (x0[combined_mask] - cam_poses[combined_mask]).norm(dim=1)
             mmin = dist_map[dist_map > 0].min()
             mmax = dist_map.max()
             dist_map = (dist_map - mmin) / (mmax - mmin)
-            dist_map[~mask] = 1.0
+            dist_map[~combined_mask] = 1.0
             dist_map = 1 - dist_map
             dist_map = dist_map.cpu().numpy()
             dist_map = dist_map.reshape(img_size, img_size)
             image = Image.fromarray((dist_map * 255).astype(np.uint8))
             image.save('distance_map.png')
 
-        # compute normals
+        # save normal shading
         with torch.no_grad():
-            normals = (pts.data[m] - pts_mapped[m])
-            normals = normals / normals.norm(dim=1, keepdim=True)
-
-            print(pts.data[m].shape, pts_mapped[m].shape, mask.sum(), m.sum())
-
-            colors = (-dirs[mask] * normals).sum(dim=1)
+            colors = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
+            colors[combined_mask] = (-dirs[combined_mask] * normals[accepted_mask]).sum(dim=1)
             colors = torch.abs(colors)
             colors = (colors + 1.0) * 0.5
-
-            img = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
-            img[mask] = colors
-
-            img = img.reshape(img_size, img_size).cpu().numpy()
-            image = Image.fromarray((img * 255).astype(np.uint8))
+            colors[~combined_mask] = 0.0
+            colors = colors.cpu().numpy()
+            colors = colors.reshape(img_size, img_size)
+            image = Image.fromarray((colors * 255).astype(np.uint8))
             image.save('normal_shading.png')
-
-        mask_img = mask.reshape(img_size, img_size)
-        mask_img = mask_img.cpu().numpy()
-        normals = normals.cpu().numpy()
-        t_sdf, sdf_pts, sdf_barycentrics, sdf_idxs = point_query(fine_traverser, pts_mapped, device)
-        # t = t.cpu().numpy()
-        t = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
-
-        print(t.min(), t.max())
-
-        t[mask] = 1.0
-        t = t.cpu().numpy()
-
-        light_dir = np.array([1, -1, 1])
-        light_dir = light_dir / np.linalg.norm(light_dir)
-
-        normals[np.isnan(normals)] = 0
-        colors = t
-
-        img = colors.reshape(img_size, img_size)
-        img[~mask_img] = 0
-
-        img = img / img.max()
-
-        image = Image.fromarray((img * 255).astype(np.uint8))
-        image.save('output.png')
 
     # Save checkpoint
     torch.save({"G": G.state_dict()}, ckpt)
