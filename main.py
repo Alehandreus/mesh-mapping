@@ -39,8 +39,8 @@ def main():
     # rough_path = "models/monkey_rough.fbx"
 
     fine_path = "models/petmonster_orig.fbx"
-    # rough_path = "models/petmonster_outer_1000.fbx"
-    rough_path = "models/petmonster_inner_1000.fbx"
+    rough_path = "models/petmonster_outer_1000.fbx"
+    # rough_path = "models/petmonster_inner_1000.fbx"
     # rough_path = "models/petmonster_rough.fbx"
 
     # fine_path = "models/monkey_126290.fbx"
@@ -48,12 +48,7 @@ def main():
 
     batch_size = 100000
     iters = 2000
-    transport_steps = 1
-    critic_steps = 1
     g_lr = 1e-3
-    d_lr = 1e-4
-    gp_lambda = 0.0
-    id_lambda = 0.3
     log_interval = 100
     chamfer_points = 10000
     save_points = 100000
@@ -99,20 +94,18 @@ def main():
 
         print("Starting training...")
         for it in range(1, iters + 1):
-            # ---------------- Generator (transport map) ----------------
-            for _ in range(transport_steps):
-                x_src, barycentrics, face_idxs = sample_points(rough_sampler, batch_size, device)
-                g_opt.zero_grad(set_to_none=True)
-                x_fake = G(x=x_src, barycentrics=barycentrics, face_idxs=face_idxs)
+            x_src, barycentrics, face_idxs = sample_points(rough_sampler, batch_size, device)
+            g_opt.zero_grad(set_to_none=True)
+            x_fake = G(x=x_src, barycentrics=barycentrics, face_idxs=face_idxs)
 
-                # sdf_t, sdf_closest_pts, _, _ = point_query(fine_traverser, x_fake, device)
-                sdf_t, sdf_closest_pts, _, _ = point_query(fine_traverser, x_src, device)
-                g_adv = (sdf_closest_pts - x_fake).abs().sum(dim=1).mean()
+            # sdf_t, sdf_closest_pts, _, _ = point_query(fine_traverser, x_fake, device)
+            sdf_t, sdf_closest_pts, _, _ = point_query(fine_traverser, x_src, device)
+            g_adv = (sdf_closest_pts - x_fake).abs().sum(dim=1).mean()
 
-                g_id = ((x_fake - x_src) ** 2).mean()
-                g_loss = g_adv #+ id_lambda * g_id
-                g_loss.backward()
-                g_opt.step()
+            g_id = ((x_fake - x_src) ** 2).mean()
+            g_loss = g_adv #+ id_lambda * g_id
+            g_loss.backward()
+            g_opt.step()
 
             if it % log_interval == 0:
                 points_true, _, _ = sample_points(fine_sampler, chamfer_points, device)
@@ -172,9 +165,14 @@ def main():
             y = G(x) -- mapped points on fine mesh surface
         """
 
-        epochs = 10
-        # threshold = 0.04
-        threshold = np.inf
+        epochs = 100
+        threshold = 0.0005
+        # threshold = np.inf
+
+        accepted_x1 = torch.zeros_like(x0)
+        accepted_y1 = torch.zeros_like(x0)
+        accepted_mask = torch.zeros((x0.shape[0],), dtype=torch.bool, device=device)
+        accepted_normals = torch.zeros_like(x0)
 
         x = nn.Parameter(x0, requires_grad=True)
         optim = torch.optim.LBFGS([x], lr=1e-1, max_iter=30, line_search_fn='strong_wolfe')
@@ -201,16 +199,31 @@ def main():
                 loss = get_raytrace_loss(cam_poses, dirs, G(x))
                 print("Loss:", loss.item())
 
-        x1 = x.data.detach()
-        y1 = G(x1).detach()
+            loss = get_raytrace_loss(cam_poses, dirs, G(x), reduction='none')
+            mask = loss < threshold
 
-        loss = get_raytrace_loss(cam_poses, dirs, y1, reduction='none')
-        accepted_mask = loss < threshold
+            accepted_x1[mask] = x.data[mask]
+            accepted_y1[mask] = G(x)[mask]
+            accepted_mask[mask] = True
 
+            print(f"Accepted {accepted_mask.sum().item()} / {x.shape[0]}")
+
+        # x1 = x.data.detach()
+        # y1 = G(x1).detach()
+
+        # loss = get_raytrace_loss(cam_poses, dirs, y1, reduction='none')
+        # mask = loss < threshold
+
+        # normals = (x1 - y1)
+        # normals = normals / normals.norm(dim=1, keepdim=True)
+
+        x1 = accepted_x1.detach()
+        y1 = accepted_y1.detach()
+        mask = accepted_mask
         normals = (x1 - y1)
-        normals = normals / normals.norm(dim=1, keepdim=True)
+        normals = normals / normals.norm(dim=1, keepdim=True)        
 
-        return x1, y1, accepted_mask, normals
+        return x1, y1, mask, normals
 
     G.eval()
         
@@ -232,8 +245,9 @@ def main():
             mmin = heatmap[heatmap > 0].min()
             mmax = heatmap.max()
             heatmap = (heatmap - mmin) / (mmax - mmin)
-            heatmap[~initial_mask] = 1.0
-            heatmap = 1 - heatmap
+            heatmap[~initial_mask] = 0.0
+            # heatmap = 1 - heatmap
+            heatmap = torch.sqrt(1 - torch.square(1 - heatmap))
             heatmap = heatmap.cpu().numpy()
             heatmap = heatmap.reshape(img_size, img_size)
             image = Image.fromarray((heatmap * 255).astype(np.uint8))
