@@ -248,3 +248,74 @@ def get_camera_rays(mesh, img_size, device):
     d_dirs = torch.from_numpy(dirs).float().to(device)
 
     return d_cam_poses, d_dirs
+
+
+
+def write_pairs_as_obj(p0: torch.Tensor, p1: torch.Tensor, path: str) -> None:
+    """
+    p0: [N, 3] tensor
+    p1: [N, 3] tensor
+    Writes an OBJ with vertices and line segments (edges) connecting each pair.
+    No faces.
+    """
+    if p0.ndim != 2 or p1.ndim != 2 or p0.shape != p1.shape or p0.shape[1] != 3:
+        raise ValueError(f"Expected p0 and p1 to be [N,3] with same shape, got {p0.shape} and {p1.shape}")
+
+    p0c = p0.detach().to(dtype=torch.float64, device="cpu")
+    p1c = p1.detach().to(dtype=torch.float64, device="cpu")
+
+    # Interleave vertices: (p0[0], p1[0], p0[1], p1[1], ...)
+    verts = torch.stack((p0c, p1c), dim=1).reshape(-1, 3)  # [2N, 3]
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# OBJ: point pairs as line segments\n")
+        # vertices
+        for x, y, z in verts.tolist():
+            f.write(f"v {x:.17g} {y:.17g} {z:.17g}\n")
+
+        # edges as line elements; OBJ indices are 1-based
+        # pair i uses vertices (2*i+1, 2*i+2)
+        n = p0c.shape[0]
+        for i in range(n):
+            a = 2 * i + 1
+            b = 2 * i + 2
+            f.write(f"l {a} {b}\n")
+
+
+def write_triples_as_obj(p0: torch.Tensor, p1: torch.Tensor, p2: torch.Tensor, path: str) -> None:
+    """
+    p0, p1, p2: [N, 3] tensors (same shape)
+    Writes an OBJ with vertices and line segments:
+      - connects p0[i] -> p1[i]
+      - connects p1[i] -> p2[i]
+    Does NOT connect p0[i] -> p2[i].
+    No faces.
+    """
+    for name, t in (("p0", p0), ("p1", p1), ("p2", p2)):
+        if t.ndim != 2 or t.shape[1] != 3:
+            raise ValueError(f"{name} must be [N,3], got {t.shape}")
+    if p0.shape != p1.shape or p0.shape != p2.shape:
+        raise ValueError(f"All tensors must have the same shape, got {p0.shape}, {p1.shape}, {p2.shape}")
+
+    p0c = p0.detach().to(dtype=torch.float64, device="cpu")
+    p1c = p1.detach().to(dtype=torch.float64, device="cpu")
+    p2c = p2.detach().to(dtype=torch.float64, device="cpu")
+
+    # Interleave per triple: (p0[i], p1[i], p2[i]) for i=0..N-1
+    verts = torch.stack((p0c, p1c, p2c), dim=1).reshape(-1, 3)  # [3N, 3]
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# OBJ: point triples as two line segments per triple (p0-p1, p1-p2)\n")
+
+        # vertices
+        for x, y, z in verts.tolist():
+            f.write(f"v {x:.17g} {y:.17g} {z:.17g}\n")
+
+        # edges as line elements; OBJ indices are 1-based
+        n = p0c.shape[0]
+        for i in range(n):
+            a = 3 * i + 1  # p0[i]
+            b = 3 * i + 2  # p1[i]
+            c = 3 * i + 3  # p2[i]
+            f.write(f"l {a} {b}\n")
+            f.write(f"l {b} {c}\n")

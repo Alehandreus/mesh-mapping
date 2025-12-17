@@ -17,7 +17,7 @@ class ResidualMap(nn.Module):
             "otype": "HashGrid",
             "n_levels": 8,
             "n_features_per_level": 2,
-            "log2_hashmap_size": 15,
+            "log2_hashmap_size": 13,
             "base_resolution": 2,
             "per_level_scale": 2,
             "fixed_point_pos": False,
@@ -32,60 +32,28 @@ class ResidualMap(nn.Module):
 
         self.n_input_dims = 3
         # self.encoding = VertexEncoder(mesh)
-        self.encoding = TensoRFEncoder(mesh)
+        # self.encoding = TensoRFEncoder(mesh)
         # self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
+        self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
         self.n_encoder_dims = self.encoding.n_output_dims    
         self.n_output_dims = 3
 
         self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
+        # self.network = tcnn.Network(3, self.n_output_dims, self.network_config)
 
     def forward(self, x, **kwargs):
         x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
         x_enc = self.encoding(x, **kwargs).float()
-        delta = self.network(x_enc)
+        delta = self.network(x_enc).float()
         y = x + delta
         y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
+
+        # x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
+        # delta = self.network(x).float()
+        # y = x + delta
+        # y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
+
         return y
-
-
-class Critic(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        mesh_min, mesh_max = mesh.get_bounds()
-        self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
-        self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
-
-        self.encoding_config = {
-            "otype": "HashGrid",
-            "n_levels": 8,
-            "n_features_per_level": 2,
-            "log2_hashmap_size": 18,
-            "base_resolution": 2,
-            "per_level_scale": 2,
-            "fixed_point_pos": False,
-        }
-        self.network_config = {
-            "otype": "FullyFusedMLP",
-            "activation": "ReLU",
-            "output_activation": "None",
-            "n_neurons": 64,
-            "n_hidden_layers": 4,
-        }
-
-        self.n_input_dims = 3
-        self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.encoding.n_output_dims
-        self.n_output_dims = 1
-
-        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)        
-
-    def forward(self, x, **kwargs):
-        x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        x_enc = self.encoding(x).float()
-        out = self.network(x_enc).squeeze(-1)
-        return out
-
 
 
 class TensoRFEncoder(nn.Module):
@@ -105,8 +73,8 @@ class TensoRFEncoder(nn.Module):
             ], dtype=torch.float32, device='cuda'),
             device='cuda',
 
-            gridSize=[64] * 3,
-            appearance_n_comp=2,
+            gridSize=[128] * 3,
+            appearance_n_comp=4,
             density_n_comp=1,
         )
 
@@ -147,7 +115,6 @@ class VertexEncoder(nn.Module):
 
         self.faces = mesh.get_faces()
         self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
-        # print(self.faces.shape)
 
     def forward(self, x, face_idxs, barycentrics):
         v0_idxs = self.faces[face_idxs, 0]
@@ -158,12 +125,18 @@ class VertexEncoder(nn.Module):
         v1_emb = self.embeddings(v1_idxs)
         v2_emb = self.embeddings(v2_idxs)
 
-        # print(v0_emb.shape, barycentrics.shape)
-
         emb = (barycentrics[:, 0, None] * v0_emb +
                barycentrics[:, 1, None] * v1_emb +
                barycentrics[:, 2, None] * v2_emb)
         
-        # print(emb.shape)
-
         return emb
+    
+
+class HashGridEncoding(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.encoding = tcnn.Encoding(*args, **kwargs)
+        self.n_output_dims = self.encoding.n_output_dims
+    
+    def forward(self, x, **kwargs):
+        return self.encoding(x)
