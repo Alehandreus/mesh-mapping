@@ -16,8 +16,8 @@ class ResidualMap(nn.Module):
         self.encoding_config = {
             "otype": "HashGrid",
             "n_levels": 8,
-            "n_features_per_level": 2,
-            "log2_hashmap_size": 13,
+            "n_features_per_level": 4,
+            "log2_hashmap_size": 11,
             "base_resolution": 2,
             "per_level_scale": 2,
             "fixed_point_pos": False,
@@ -106,7 +106,7 @@ class VertexEncoder(nn.Module):
     def __init__(self, mesh):
         super().__init__()
 
-        self.emb_size = 32
+        self.emb_size = 16
         self.n_output_dims = self.emb_size
 
         self.n_vertices = mesh.get_num_vertices()

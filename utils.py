@@ -212,23 +212,38 @@ def chamfer_distance(a, b):
     return cd
 
 
-def get_camera_rays(mesh, img_size, device):
+def get_camera_rays(mesh, img_size, device, angle=0.0):
+    """
+    angle: rotation around the object in radians (positive = CCW around +Z).
+           angle=0 keeps the original camera pose.
+    """
     n_pixels = img_size * img_size
 
     mesh_min, mesh_max = mesh.get_bounds()
     max_extent = max(mesh_max - mesh_min)
-
     center = (mesh_max + mesh_min) * 0.5
 
+    # --- original camera offset, but rotated around +Z by `angle`
+    base_dx = max_extent * 1.0
+    base_dy = -max_extent * 1.5
+    r_xy = np.hypot(base_dx, base_dy)
+    base_theta = np.arctan2(base_dy, base_dx)
+    theta = base_theta + angle
+
     cam_pos = np.array([
-        center[0] + max_extent * 1.0,
-        center[1] - max_extent * 1.5,
-        center[2] + max_extent * 0.5,
-    ])
+        center[0] + r_xy * np.cos(theta),
+        center[1] + r_xy * np.sin(theta),
+        center[2] + max_extent * 0.5,   # keep the same "slightly top" height
+    ], dtype=np.float32)
+
     cam_poses = np.tile(cam_pos, (n_pixels, 1))
+
+    # forward vector (keep same scaling as your original code)
     cam_dir = (center - cam_pos) * 0.9
 
-    x_dir = np.cross(cam_dir, np.array([0, 0, 1]))
+    up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+    x_dir = np.cross(cam_dir, up)
     x_dir = x_dir / np.linalg.norm(x_dir) * (max_extent / 2)
 
     y_dir = -np.cross(x_dir, cam_dir)
@@ -238,7 +253,6 @@ def get_camera_rays(mesh, img_size, device):
         np.linspace(-1, 1, img_size),
         np.linspace(-1, 1, img_size),
     )
-
     x_coords = x_coords.flatten()
     y_coords = y_coords.flatten()
 
@@ -248,7 +262,6 @@ def get_camera_rays(mesh, img_size, device):
     d_dirs = torch.from_numpy(dirs).float().to(device)
 
     return d_cam_poses, d_dirs
-
 
 
 def write_pairs_as_obj(p0: torch.Tensor, p1: torch.Tensor, path: str) -> None:
