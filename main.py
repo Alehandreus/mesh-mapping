@@ -13,6 +13,7 @@ from utils import sample_points, point_query, chamfer_distance, get_camera_rays,
 from models import ResidualMap
 
 from dataclasses import dataclass
+from renderer_utils import initial_camera_from_mesh, camera_rays_from_pose
 
 
 @dataclass
@@ -129,7 +130,7 @@ def do_raytrace(cam_poses, dirs, traverser, G, x0, verbose=False):
 
     device = x0.device
 
-    epochs = 100
+    epochs = 3
     # epochs = 30
     threshold = 0.01
     # threshold = 0.1
@@ -184,10 +185,96 @@ def do_raytrace(cam_poses, dirs, traverser, G, x0, verbose=False):
     return x1, y1, mask, normals
 
 
+def do_raytrace_wrapper(cam_poses, dirs, mesh, net, verbose=False):
+    initial_mask, t, normals = mesh.ray_tracer.trace(cam_poses, dirs)
+    x0 = cam_poses + dirs * t[:, None]
+
+    x1, y1, accepted_mask, normals = do_raytrace(cam_poses[initial_mask], dirs[initial_mask], mesh.traverser, net, x0[initial_mask], verbose=verbose)
+    combined_mask = initial_mask.clone()
+    combined_mask[initial_mask] = accepted_mask
+
+    torch.cuda.empty_cache()
+
+    return x1, y1, combined_mask, normals, accepted_mask
+
+
+def do_raytrace_wrapper_2(cam_poses, dirs, inner_mesh, outer_mesh, inner_net, outer_net, verbose=False):
+    device = cam_poses.device
+    img_size = int(torch.sqrt(torch.tensor(cam_poses.shape[0], device=device)).item())
+    
+    x1 = torch.zeros((img_size * img_size, 3), dtype=torch.float32, device=device)
+    y1 = torch.zeros((img_size * img_size, 3), dtype=torch.float32, device=device)
+    combined_mask = torch.zeros((img_size * img_size,), dtype=torch.bool, device=device)
+    normals = torch.zeros((img_size * img_size, 3), dtype=torch.float32, device=device)
+    accepted_mask = torch.zeros((img_size * img_size,), dtype=torch.bool, device=device)
+
+    inner_x1, inner_y1, inner_combined_mask, inner_normals, inner_accepted_mask = do_raytrace_wrapper(cam_poses, dirs, inner_mesh, inner_net, verbose=verbose)
+    outer_x1, outer_y1, outer_combined_mask, outer_normals, outer_accepted_mask = do_raytrace_wrapper(cam_poses, dirs, outer_mesh, outer_net, verbose=verbose)
+
+    x1[outer_combined_mask] = outer_x1[outer_accepted_mask]
+    y1[outer_combined_mask] = outer_y1[outer_accepted_mask]        
+    normals[outer_combined_mask] = outer_normals[outer_accepted_mask]        
+    accepted_mask[outer_combined_mask] = True
+    combined_mask = combined_mask | outer_combined_mask
+
+    x1[inner_combined_mask] = inner_x1[inner_accepted_mask]
+    y1[inner_combined_mask] = inner_y1[inner_accepted_mask]
+    normals[inner_combined_mask] = inner_normals[inner_accepted_mask]
+    accepted_mask[inner_combined_mask] = True
+    combined_mask = combined_mask | inner_combined_mask
+
+    return x1, y1, combined_mask, normals, accepted_mask
+
+
+class Renderer:
+    def __init__(self, inner_mesh, outer_mesh, inner_net, outer_net):
+        self.inner_mesh = inner_mesh
+        self.outer_mesh = outer_mesh
+        self.inner_net = inner_net
+        self.outer_net = outer_net
+
+        self.device = 'cuda'
+
+    def draw(self, cam_params, cam_delta):
+        img_size = cam_params["img_size"]
+        print(cam_params)
+        print(cam_delta)
+
+        if "dist0" not in cam_params:
+            cam_params["dist0"] = cam_params["dist_ref"]
+
+        cam_poses, dirs = camera_rays_from_pose(
+            cam_pos=cam_params["pos"],          # (3,)
+            yaw=cam_params["yaw"],              # radians
+            pitch=cam_params["pitch"],          # radians
+            img_size=img_size,            # e.g. 512
+            max_extent=cam_params["max_extent"],
+            dist_ref=cam_params["dist0"],       # reference distance for cam_dir scaling
+            device=self.device,
+        )
+        dirs = dirs / dirs.norm(dim=1, keepdim=True)
+
+        x1, y1, combined_mask, normals, accepted_mask = do_raytrace_wrapper_2(cam_poses, dirs, self.inner_mesh, self.outer_mesh, self.inner_net, self.outer_net)
+
+        colors = torch.zeros((img_size * img_size,), dtype=torch.float32, device=self.device)
+        colors[combined_mask] = (-dirs[combined_mask] * normals[accepted_mask]).sum(dim=1)
+        colors = torch.abs(colors)
+        colors = (colors + 1.0) * 0.5
+        colors[~combined_mask] = 0.0
+        colors = colors.cpu().numpy()
+        colors = colors.reshape(img_size, img_size)
+        colors = colors * 255
+        # image = Image.fromarray((colors).astype(np.uint8))
+        # image.save('normal_shading.png')
+
+        # return image
+        return np.stack([colors, colors, colors], axis=-1)
+
+
 def main():
     ckpt_path = "mapping.pt"
-    # load_ckpt = True
-    load_ckpt = False
+    load_ckpt = True
+    # load_ckpt = False
 
     # orig_path = "models/dragon_orig.fbx"
     # inner_path = "models/dragon_inner_2000.fbx"
@@ -211,7 +298,7 @@ def main():
 
     device = "cuda"
     img_size = 512
-    raytrace = False
+    raytrace = True
 
     orig_mesh = PyMesh.from_file(orig_path)
     inner_mesh = PyMesh.from_file(inner_path)
@@ -240,49 +327,20 @@ def main():
         }, ckpt_path)
 
     if raytrace:
-        def do_raytrace_wrapper_2(cam_poses, dirs, inner_mesh, outer_mesh, inner_net, outer_net, verbose=False):
-            def do_raytrace_wrapper(cam_poses, dirs, mesh, net, verbose=False):
-                initial_mask, t, normals = mesh.ray_tracer.trace(cam_poses, dirs)
-                x0 = cam_poses + dirs * t[:, None]
-
-                x1, y1, accepted_mask, normals = do_raytrace(cam_poses[initial_mask], dirs[initial_mask], mesh.traverser, net, x0[initial_mask], verbose=verbose)
-                combined_mask = initial_mask.clone()
-                combined_mask[initial_mask] = accepted_mask
-
-                torch.cuda.empty_cache()
-
-                return x1, y1, combined_mask, normals, accepted_mask
-            
-            x1 = torch.zeros((img_size * img_size, 3), dtype=torch.float32, device=device)
-            y1 = torch.zeros((img_size * img_size, 3), dtype=torch.float32, device=device)
-            combined_mask = torch.zeros((img_size * img_size,), dtype=torch.bool, device=device)
-            normals = torch.zeros((img_size * img_size, 3), dtype=torch.float32, device=device)
-            accepted_mask = torch.zeros((img_size * img_size,), dtype=torch.bool, device=device)
-
-            inner_x1, inner_y1, inner_combined_mask, inner_normals, inner_accepted_mask = do_raytrace_wrapper(cam_poses, dirs, inner_mesh, inner_net, verbose=verbose)
-            outer_x1, outer_y1, outer_combined_mask, outer_normals, outer_accepted_mask = do_raytrace_wrapper(cam_poses, dirs, outer_mesh, outer_net, verbose=verbose)
-
-            x1[outer_combined_mask] = outer_x1[outer_accepted_mask]
-            y1[outer_combined_mask] = outer_y1[outer_accepted_mask]        
-            normals[outer_combined_mask] = outer_normals[outer_accepted_mask]        
-            accepted_mask[outer_combined_mask] = True
-            combined_mask = combined_mask | outer_combined_mask
-
-            x1[inner_combined_mask] = inner_x1[inner_accepted_mask]
-            y1[inner_combined_mask] = inner_y1[inner_accepted_mask]
-            normals[inner_combined_mask] = inner_normals[inner_accepted_mask]
-            accepted_mask[inner_combined_mask] = True
-            combined_mask = combined_mask | inner_combined_mask
-
-            return x1, y1, combined_mask, normals, accepted_mask
-
-        n_frames = 1
+        n_frames = 100
         angles = np.linspace(0, np.pi * 2, n_frames, endpoint=False)
         frames = []
 
         for angle in angles:
             cam_poses, dirs = get_camera_rays(orig_mesh.mesh, img_size=img_size, device=device, angle=angle)
             dirs = dirs / dirs.norm(dim=1, keepdim=True)
+
+            renderer = Renderer(inner_mesh, outer_mesh, inner_net, outer_net)
+            
+            cam_params = initial_camera_from_mesh(orig_mesh.mesh, angle=angle)
+            image = renderer.draw(cam_params)
+            image.save(f"normal_shading.png")
+            frames.append(image)
             
             x1, y1, combined_mask, normals, accepted_mask = do_raytrace_wrapper_2(cam_poses, dirs, inner_mesh, outer_mesh, inner_net, outer_net)
 
@@ -320,18 +378,17 @@ def main():
                 image.save('distance_map.png')
 
             # save normal shading
-            with torch.no_grad():
-                colors = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
-                colors[combined_mask] = (-dirs[combined_mask] * normals[accepted_mask]).sum(dim=1)
-                colors = torch.abs(colors)
-                colors = (colors + 1.0) * 0.5
-                colors[~combined_mask] = 0.0
-                colors = colors.cpu().numpy()
-                colors = colors.reshape(img_size, img_size)
-                image = Image.fromarray((colors * 255).astype(np.uint8))
-                image.save('normal_shading.png')
-
-                frames.append(image)
+            # with torch.no_grad():
+            #     colors = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
+            #     colors[combined_mask] = (-dirs[combined_mask] * normals[accepted_mask]).sum(dim=1)
+            #     colors = torch.abs(colors)
+            #     colors = (colors + 1.0) * 0.5
+            #     colors[~combined_mask] = 0.0
+            #     colors = colors.cpu().numpy()
+            #     colors = colors.reshape(img_size, img_size)
+            #     image = Image.fromarray((colors * 255).astype(np.uint8))
+            #     image.save('normal_shading.png')
+            #     frames.append(image)
 
         if n_frames > 1:
             frames[0].save('mapping_animation.gif', save_all=True, append_images=frames[1:], duration=n_frames * 0.5, loop=0)
