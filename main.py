@@ -33,28 +33,30 @@ def gradient_penalty(critic, real, fake, gp_lambda=10.0):
 def main():
     # fine_path = "models/sphere_fine.fbx"
     # rough_path = "models/sphere_rough_shell.fbx"
-    fine_path = "models/queen_fine.fbx"
-    rough_path = "models/queen_rough.fbx"
-    #fine_path = "models/monkey_fine.fbx"
-    #rough_path = "models/monkey_rough2.fbx"
+    #fine_path = "models/queen_fine.fbx"
+    #rough_path = "models/queen_rough.fbx"
+    fine_path = "models/monkey_fine.fbx"
+    rough_path = "models/monkey_rough2.fbx"
+    #fine_path = "models/petmonster.fbx"
+    #rough_path = "models/petmonster_rough.fbx"
     batch_size = 100000
-    iters = 5000
-    transport_steps = 1
+    iters = 500
+    transport_steps = 10
     critic_steps = 1
     g_lr = 1e-3
     d_lr = 1e-4
     gp_lambda = 0.0
-    id_lambda = 0.3
-    reversed_lambda = 20
+    id_lambda = 0
+    reversed_lambda = 100
     grad_lambda = 0
-    log_interval = 100
+    log_interval = 10
     chamfer_points = 10000
     save_points = 100000
     out_obj = "sampled_points.obj"
     ckpt = "mapping.pt"
     device = "cuda"
     img_size = 800
-    raytrace = False
+    raytrace = True
     load_ckpt = False
 
     rough_mesh_split = Mesh.from_file(rough_path)
@@ -97,24 +99,35 @@ def main():
 
     print("Starting training...")
     for it in range(1, iters + 1):
+        x_src, barycentrics, face_idxs = sample_points(rough_sampler, batch_size, device)
+        x_src.requires_grad_(True)
+
+        x_src_rev, _, _ = sample_points(fine_sampler, batch_size, device)
+        x_src_rev.requires_grad_(True)
         # ---------------- Generator (transport map) ----------------
         for _ in range(transport_steps):
-            x_src = sample_points(rough_sampler, batch_size, device)
-            x_src.requires_grad_(True)
+            
             g_opt.zero_grad(set_to_none=True)
+            g_reversed_opt.zero_grad(set_to_none=True)
 
             def loss(G, G_reversed, traverser, x_src):
+                
                 x_fake = G(x_src)
-                sdf_t, sdf_closest_pts = point_query(traverser, x_fake, device)
+                #print(x_fake)
+                sdf_t, sdf_closest_pts,  _, _ = point_query(traverser, x_fake, device)
+                #g_adv = ((sdf_closest_pts - x_fake)** 2).mean()
                 g_adv = (sdf_closest_pts - x_fake).abs().sum(dim=1).mean()
+                
+                #g_adv = sdf_closest_pts - 
 
                 # g_adv = -D(x_fake).mean()
                 g_id = ((x_fake - x_src) ** 2).mean()
                 inverse = ((G_reversed(x_fake) - x_src) ** 2).mean()
                 g_loss = g_adv + id_lambda * g_id + reversed_lambda * inverse
-                return g_loss, g_adv, g_id, inverse
+                return g_loss, g_adv, g_id, inverse, x_fake
             
-            g_loss, g_adv, g_id, inverse = loss(G, G_reversed, fine_traverser, x_src)
+            g_loss, g_adv, g_id, inverse, x_fake = loss(G, G_reversed, fine_traverser, x_src)
+            #print(g_loss)
             grad = 0
             if grad_lambda != 0:
                 grad = autograd.grad(
@@ -129,9 +142,9 @@ def main():
             g_opt.step()
 
             if reversed_lambda != 0:
-                x_src = sample_points(fine_sampler, batch_size, device)
-                x_src.requires_grad_(True)
-                g_reversed_loss, _, _, _ = loss(G_reversed, G, rough_traverser, x_src)
+                #x_src = sample_points(fine_sampler, batch_size, device)
+                #x_src.requires_grad_(True)
+                g_reversed_loss, _, _, _, _ = loss(G_reversed, G, rough_traverser, x_src_rev)
                 #if grad_lambda != 0:
                 #    grad = autograd.grad(
                 #        outputs=g_reversed_loss,
@@ -145,9 +158,9 @@ def main():
                 g_reversed_opt.step()
 
         if it % log_interval == 0:
-            points_true = sample_points(fine_sampler, chamfer_points, device)
+            points_true, _, _ = sample_points(fine_sampler, chamfer_points, device)
 
-            points_mapped = sample_points(rough_sampler, chamfer_points, device)
+            points_mapped, _, _ = sample_points(rough_sampler, chamfer_points, device)
             # print(barycentrics_mapped[:4], face_idxs_mapped[:4])
             # t, points_mapped, barycentrics_mapped, face_idxs_mapped = point_query(rough_traverser, points_mapped, device)
             # print(barycentrics_mapped[:4], face_idxs_mapped[:4])
@@ -161,7 +174,7 @@ def main():
 
             fine_vertices = fine_mesh.get_vertices()
             fine_vertices = torch.from_numpy(fine_vertices).float().to(device)
-            sdf_t, sdf_closests = point_query(rough_traverser, fine_vertices, device)
+            sdf_t, sdf_closests, _, _ = point_query(rough_traverser, fine_vertices, device)
             
             vertices = rough_mesh_split.get_vertices()
             faces = rough_mesh_split.get_faces()
@@ -186,7 +199,7 @@ def main():
             print(f"[it {it:05d}] g_loss={g_loss.item():.4f} "
                   f"g_id={g_id.item():.6f} "
                   f"chamfer={cd:.6f} time={elapsed:.2f}s "
-                  f"g_adv={g_adv.item():.5f} "
+                  f"g_adv={g_adv.item():.8f} "
                   f"inverse={inverse.item():.6f} ")
         
     if raytrace:
@@ -212,7 +225,7 @@ def main():
 
         for _ in range(epochs):
             with torch.no_grad():
-                t_sdf, sdf_pts = point_query(rough_traverser, pts.data, device)
+                t_sdf, sdf_pts,  _, _ = point_query(rough_traverser, pts.data, device)
                 pts.data = sdf_pts
 
             # t_sdf, sdf_pts = point_query(rough_traverser, pts, device)
@@ -235,7 +248,7 @@ def main():
             # scheduler.step()
 
         with torch.no_grad():
-            t_sdf, sdf_pts = point_query(rough_traverser, pts.data, device)
+            t_sdf, sdf_pts,  _, _ = point_query(rough_traverser, pts.data, device)
             pts.data = sdf_pts
 
         threshold = 0.01
@@ -275,7 +288,7 @@ def main():
         mask_img = mask.reshape(img_size, img_size)
         mask_img = mask_img.cpu().numpy()
         normals = normals.cpu().numpy()
-        t_sdf, sdf_pts = point_query(fine_traverser, pts_mapped, device)
+        t_sdf, sdf_pts, _, _ = point_query(fine_traverser, pts_mapped, device)
         # t = t.cpu().numpy()
         t = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
 
@@ -300,7 +313,7 @@ def main():
 
 
     # Save checkpoint
-    torch.save({"G": G.state_dict(), "D": D.state_dict()}, ckpt)
+    torch.save({"G": G.state_dict()}, ckpt)
     print(f"Saved checkpoint to {ckpt}")
 
     # Save mapped points from a larger rough sample

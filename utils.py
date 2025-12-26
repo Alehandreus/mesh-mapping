@@ -4,19 +4,25 @@ import torch
 
 @torch.no_grad()
 def sample_points(sampler, batch_size, device):
-    pts = torch.zeros((batch_size, 3), dtype=torch.float32, device=device)
-    sampler.sample(pts, batch_size)
+    points = torch.zeros((batch_size, 3), dtype=torch.float32, device=device)
+    barycentrics = torch.zeros((batch_size, 3), dtype=torch.float32, device=device)
+    face_idxs = torch.zeros((batch_size,), dtype=torch.uint32, device=device)
 
-    return pts
+    sampler.sample(points, barycentrics, face_idxs, batch_size)
+
+    return points, barycentrics, face_idxs.long()
 
 
 @torch.no_grad()
 def point_query(traverser, points, device):
     t = torch.zeros((points.size(0),), dtype=torch.float32, device=device)
     closest_pts = torch.zeros((points.size(0), 3), dtype=torch.float32, device=device)
-    traverser.point_query(points, t, closest_pts)
+    barycentrics = torch.zeros((points.size(0), 3), dtype=torch.float32, device=device)
+    face_idxs = torch.zeros((points.size(0),), dtype=torch.uint32, device=device)
+    
+    traverser.point_query(points, t, closest_pts, barycentrics, face_idxs)
 
-    return t, closest_pts
+    return t, closest_pts, barycentrics, face_idxs.long()
 
 
 def chamfer_distance(a, b):
