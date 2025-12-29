@@ -23,17 +23,20 @@ class PyMesh:
     sampler: GPUMeshSampler
     traverser: GPUTraverser
     ray_tracer: GPURayTracer
-    
+
     @staticmethod
     def from_file(path: str):
         mesh = Mesh.from_file(path)
-        sampler = GPUMeshSampler(mesh, MeshSamplerMode.SURFACE_UNIFORM, 100000)
         builder = CPUBuilder(mesh)
         bvh = builder.build_bvh(25)
+        mesh = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
+
+        sampler = GPUMeshSampler(mesh, MeshSamplerMode.SURFACE_UNIFORM, 100000)
+        
         traverser = GPUTraverser(bvh)
         ray_tracer = GPURayTracer(bvh)
 
-        mesh_split = Mesh.from_file(path)
+        mesh_split = mesh
         # while len(mesh_split.get_vertices()) < 1000000:
         #     mesh_split.split_faces(0.5)
 
@@ -273,8 +276,8 @@ class Renderer:
 
 def main():
     ckpt_path = "mapping.pt"
-    load_ckpt = True
-    # load_ckpt = False
+    # load_ckpt = True
+    load_ckpt = False
 
     # orig_path = "models/dragon_orig.fbx"
     # inner_path = "models/dragon_inner_2000.fbx"
@@ -327,7 +330,7 @@ def main():
         }, ckpt_path)
 
     if raytrace:
-        n_frames = 100
+        n_frames = 1
         angles = np.linspace(0, np.pi * 2, n_frames, endpoint=False)
         frames = []
 
@@ -335,12 +338,12 @@ def main():
             cam_poses, dirs = get_camera_rays(orig_mesh.mesh, img_size=img_size, device=device, angle=angle)
             dirs = dirs / dirs.norm(dim=1, keepdim=True)
 
-            renderer = Renderer(inner_mesh, outer_mesh, inner_net, outer_net)
+            # renderer = Renderer(inner_mesh, outer_mesh, inner_net, outer_net)
             
-            cam_params = initial_camera_from_mesh(orig_mesh.mesh, angle=angle)
-            image = renderer.draw(cam_params)
-            image.save(f"normal_shading.png")
-            frames.append(image)
+            # cam_params = initial_camera_from_mesh(orig_mesh.mesh, angle=angle)
+            # image = renderer.draw(cam_params)
+            # image.save(f"normal_shading.png")
+            # frames.append(image)
             
             x1, y1, combined_mask, normals, accepted_mask = do_raytrace_wrapper_2(cam_poses, dirs, inner_mesh, outer_mesh, inner_net, outer_net)
 
@@ -378,17 +381,17 @@ def main():
                 image.save('distance_map.png')
 
             # save normal shading
-            # with torch.no_grad():
-            #     colors = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
-            #     colors[combined_mask] = (-dirs[combined_mask] * normals[accepted_mask]).sum(dim=1)
-            #     colors = torch.abs(colors)
-            #     colors = (colors + 1.0) * 0.5
-            #     colors[~combined_mask] = 0.0
-            #     colors = colors.cpu().numpy()
-            #     colors = colors.reshape(img_size, img_size)
-            #     image = Image.fromarray((colors * 255).astype(np.uint8))
-            #     image.save('normal_shading.png')
-            #     frames.append(image)
+            with torch.no_grad():
+                colors = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
+                colors[combined_mask] = (-dirs[combined_mask] * normals[accepted_mask]).sum(dim=1)
+                colors = torch.abs(colors)
+                colors = (colors + 1.0) * 0.5
+                colors[~combined_mask] = 0.0
+                colors = colors.cpu().numpy()
+                colors = colors.reshape(img_size, img_size)
+                image = Image.fromarray((colors * 255).astype(np.uint8))
+                image.save('normal_shading.png')
+                frames.append(image)
 
         if n_frames > 1:
             frames[0].save('mapping_animation.gif', save_all=True, append_images=frames[1:], duration=n_frames * 0.5, loop=0)

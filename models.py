@@ -16,8 +16,8 @@ class ResidualMap(nn.Module):
         self.encoding_config = {
             "otype": "HashGrid",
             "n_levels": 8,
-            "n_features_per_level": 4,
-            "log2_hashmap_size": 11,
+            "n_features_per_level": 2,
+            "log2_hashmap_size": 8,
             "base_resolution": 2,
             "per_level_scale": 2,
             "fixed_point_pos": False,
@@ -31,11 +31,12 @@ class ResidualMap(nn.Module):
         }
 
         self.n_input_dims = 3
-        # self.encoding = VertexEncoder(mesh)
+        self.encoding = VertexEncoder(mesh)
         # self.encoding = TensoRFEncoder(mesh)
         # self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.encoding.n_output_dims    
+        # self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
+        self.n_encoder_dims = self.encoding.n_output_dims
+        # self.n_encoder_dims = self.n_input_dims
         self.n_output_dims = 3
 
         self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
@@ -107,11 +108,11 @@ class VertexEncoder(nn.Module):
         super().__init__()
 
         self.emb_size = 16
-        self.n_output_dims = self.emb_size
+        self.n_output_dims = self.emb_size + 3
 
         self.n_vertices = mesh.get_num_vertices()
         self.embeddings = nn.Embedding(self.n_vertices, self.emb_size)
-        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
+        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.1)
 
         self.faces = mesh.get_faces()
         self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
@@ -128,6 +129,11 @@ class VertexEncoder(nn.Module):
         emb = (barycentrics[:, 0, None] * v0_emb +
                barycentrics[:, 1, None] * v1_emb +
                barycentrics[:, 2, None] * v2_emb)
+        
+        emb = torch.concatenate([
+            emb,
+            x,
+        ], dim=-1)
         
         return emb
     
