@@ -16,8 +16,8 @@ class ResidualMap(nn.Module):
         self.encoding_config = {
             "otype": "HashGrid",
             "n_levels": 8,
-            "n_features_per_level": 2,
-            "log2_hashmap_size": 8,
+            "n_features_per_level": 4,
+            "log2_hashmap_size": 12,
             "base_resolution": 2,
             "per_level_scale": 2,
             "fixed_point_pos": False,
@@ -31,10 +31,11 @@ class ResidualMap(nn.Module):
         }
 
         self.n_input_dims = 3
-        self.encoding = VertexEncoder(mesh)
-        # self.encoding = TensoRFEncoder(mesh)
+        # self.encoding = VertexEncoding(mesh)
+        # self.encoding = HashVertexEncoding(mesh)
+        # self.encoding = TensoRFEncoding(mesh)
         # self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        # self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
+        self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
         self.n_encoder_dims = self.encoding.n_output_dims
         # self.n_encoder_dims = self.n_input_dims
         self.n_output_dims = 3
@@ -57,7 +58,7 @@ class ResidualMap(nn.Module):
         return y
 
 
-class TensoRFEncoder(nn.Module):
+class TensoRFEncoding(nn.Module):
     def __init__(self, mesh):
         super().__init__()
 
@@ -103,7 +104,7 @@ class TensoRFEncoder(nn.Module):
         return self.compute_appfeature(x)
     
 
-class VertexEncoder(nn.Module):
+class VertexEncoding(nn.Module):
     def __init__(self, mesh):
         super().__init__()
 
@@ -112,10 +113,11 @@ class VertexEncoder(nn.Module):
 
         self.n_vertices = mesh.get_num_vertices()
         self.embeddings = nn.Embedding(self.n_vertices, self.emb_size)
-        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.1)
+        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
 
         self.faces = mesh.get_faces()
-        self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
+        # self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
+        self.faces = torch.from_numpy(self.faces).long().cuda()
 
     def forward(self, x, face_idxs, barycentrics):
         v0_idxs = self.faces[face_idxs, 0]
@@ -132,10 +134,54 @@ class VertexEncoder(nn.Module):
         
         emb = torch.concatenate([
             emb,
-            x,
+            x * 0,
         ], dim=-1)
         
         return emb
+    
+
+class HashVertexEncoding(nn.Module):
+    def __init__(self, mesh):
+        super().__init__()
+
+        self.emb_size = 4 * 1
+        self.n_output_dims = self.emb_size + 3
+        self.n_vertices = mesh.get_num_vertices()
+        self.grid_size = self.n_vertices // 8
+
+        self.embeddings = nn.Embedding(self.grid_size, self.emb_size)
+        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
+
+        self.faces = mesh.get_faces()
+        self.faces = torch.from_numpy(self.faces).long().cuda()
+
+    def forward(self, x, face_idxs, barycentrics):
+        v0_idxs = self.faces[face_idxs, 0]
+        v1_idxs = self.faces[face_idxs, 1]
+        v2_idxs = self.faces[face_idxs, 2]
+
+        v0_hash = self.vertex_hash(v0_idxs)
+        v1_hash = self.vertex_hash(v1_idxs)
+        v2_hash = self.vertex_hash(v2_idxs)
+
+        v0_emb = self.embeddings(v0_hash)
+        v1_emb = self.embeddings(v1_hash)
+        v2_emb = self.embeddings(v2_hash)
+
+        emb = (barycentrics[:, 0, None] * v0_emb +
+               barycentrics[:, 1, None] * v1_emb +
+               barycentrics[:, 2, None] * v2_emb)
+        
+        emb = torch.concatenate([
+            emb,
+            x * 0,
+        ], dim=-1)
+        
+        return emb
+
+    def vertex_hash(self, vertex_idx):
+        magic_prime = 2654435761
+        return (vertex_idx ^ magic_prime) % self.grid_size
     
 
 class HashGridEncoding(nn.Module):

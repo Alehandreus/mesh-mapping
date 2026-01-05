@@ -36,7 +36,10 @@ class PyMesh:
         traverser = GPUTraverser(bvh)
         ray_tracer = GPURayTracer(bvh)
 
-        mesh_split = mesh
+        mesh_split = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
+        # mesh_split.split_faces(0)
+        # mesh_split.split_faces(0)
+        # mesh_split.split_faces(0)
         # while len(mesh_split.get_vertices()) < 1000000:
         #     mesh_split.split_faces(0.5)
 
@@ -63,7 +66,7 @@ def gradient_penalty(critic, real, fake, gp_lambda=10.0):
 
 def train(net, orig_mesh, rough_mesh):
     lr = 1e-3
-    epochs = 2000
+    epochs = 200
     device = net.parameters().__next__().device
     batch_size = 100000
     log_interval = 100
@@ -72,6 +75,7 @@ def train(net, orig_mesh, rough_mesh):
 
     net.train()
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=1.0)
+    # opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=0.1)
     # opt = torch.optim.AdamW(net.parameters(), lr=lr)
 
     print("Starting training...")
@@ -129,6 +133,9 @@ def do_raytrace(cam_poses, dirs, traverser, G, x0, verbose=False):
         y = G(x) -- mapped points on fine mesh surface
     """
 
+    # is_vertex = True
+    is_vertex = False
+
     G.eval()
 
     device = x0.device
@@ -144,7 +151,12 @@ def do_raytrace(cam_poses, dirs, traverser, G, x0, verbose=False):
     accepted_y1 = torch.zeros_like(x0)
     accepted_mask = torch.zeros((x0.shape[0],), dtype=torch.bool, device=device)
 
-    x = nn.Parameter(x0, requires_grad=True)
+    if not is_vertex:
+        x = nn.Parameter(x0, requires_grad=True)
+    else:
+        x = x0
+    sdf_t, sdf_closests, sdf_barycentrics, sdf_face_idxs = point_query(traverser, x.data, device)
+    barycentrics = nn.Parameter(torch.zeros((x0.shape[0], 3), dtype=torch.float32, device=device), requires_grad=True)
     # optim = torch.optim.LBFGS([x], lr=0.1, max_iter=30, line_search_fn='strong_wolfe')
     optim = torch.optim.Adam([x], lr=0.01)
     # optim = torch.optim.SGD([x], lr=0.01, momentum=0.9)
@@ -155,23 +167,25 @@ def do_raytrace(cam_poses, dirs, traverser, G, x0, verbose=False):
 
     for _ in range(epochs):
         with torch.no_grad():
-            _, sdf_closest_pts, _, _ = point_query(traverser, x.data, device)
-            x.data = sdf_closest_pts
+            _, sdf_closests, sdf_barycentrics, sdf_face_idxs = point_query(traverser, x.data, device)
+            barycentrics.data = sdf_barycentrics
+            if not is_vertex:
+                x.data = sdf_closests
 
         def closure():
             optim.zero_grad()
-            y = G(x)
+            y = G(x, face_idxs=sdf_face_idxs, barycentrics=barycentrics)
             loss = get_raytrace_loss(cam_poses, dirs, y)
             loss.backward()
             return loss
 
         optim.step(closure)
-
-        loss = get_raytrace_loss(cam_poses, dirs, G(x), reduction='none')
+    
+        loss = get_raytrace_loss(cam_poses, dirs, G(x, face_idxs=sdf_face_idxs, barycentrics=barycentrics), reduction='none')
         mask = loss < threshold
 
         accepted_x1[mask] = x.data[mask]
-        accepted_y1[mask] = G(x)[mask]
+        accepted_y1[mask] = G(x, face_idxs=sdf_face_idxs, barycentrics=barycentrics)[mask]
         accepted_mask[mask] = True
 
         if verbose:
@@ -280,8 +294,8 @@ def main():
     load_ckpt = False
 
     # orig_path = "models/dragon_orig.fbx"
-    # inner_path = "models/dragon_inner_2000.fbx"
-    # outer_path = "models/dragon_outer_2000.fbx"
+    # inner_path = "models/dragon_inner_3000.fbx"
+    # outer_path = "models/dragon_outer_3000.fbx"
 
     orig_path = "models/petmonster_orig.fbx"
     inner_path = "models/petmonster_inner_2000.fbx"
@@ -311,8 +325,9 @@ def main():
     inner_mesh.mesh.save_preview(f"inner_mesh_preview.png", 512, 512, inner_mesh.mesh.get_c(), inner_mesh.mesh.get_R())
     orig_mesh.mesh.save_preview(f"orig_mesh_preview.png", 512, 512, orig_mesh.mesh.get_c(), orig_mesh.mesh.get_R())
 
-    inner_net = ResidualMap(inner_mesh.mesh).to(device)
-    outer_net = ResidualMap(outer_mesh.mesh).to(device)
+    # inner_net = ResidualMap(inner_mesh.mesh).to(device)
+    inner_net = ResidualMap(inner_mesh.mesh_split).to(device)
+    outer_net = ResidualMap(outer_mesh.mesh_split).to(device)
 
     if load_ckpt:
         print(f"Loading checkpoint from {ckpt_path}...")
@@ -348,23 +363,23 @@ def main():
             x1, y1, combined_mask, normals, accepted_mask = do_raytrace_wrapper_2(cam_poses, dirs, inner_mesh, outer_mesh, inner_net, outer_net)
 
             # save heatmap of loss
-            with torch.no_grad():
-                initial_mask, t, _ = outer_mesh.ray_tracer.trace(cam_poses, dirs)
-                x0 = cam_poses + dirs * t[:, None]
+            # with torch.no_grad():
+            #     initial_mask, t, _ = outer_mesh.ray_tracer.trace(cam_poses, dirs)
+            #     x0 = cam_poses + dirs * t[:, None]
 
-                heatmap = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
-                loss = get_raytrace_loss(cam_poses[initial_mask], dirs[initial_mask], inner_net(y1[initial_mask]), reduction='none')
-                heatmap[initial_mask] = loss
-                mmin = heatmap[heatmap > 0].min()
-                mmax = heatmap.max()
-                heatmap = (heatmap - mmin) / (mmax - mmin)
-                heatmap[~initial_mask] = 0.0
-                # heatmap = 1 - heatmap
-                heatmap = torch.sqrt(1 - torch.square(1 - heatmap))
-                heatmap = heatmap.cpu().numpy()
-                heatmap = heatmap.reshape(img_size, img_size)
-                image = Image.fromarray((heatmap * 255).astype(np.uint8))
-                image.save('loss_heatmap.png')
+            #     heatmap = torch.zeros((img_size * img_size,), dtype=torch.float32, device=device)
+            #     loss = get_raytrace_loss(cam_poses[initial_mask], dirs[initial_mask], inner_net(y1[initial_mask]), reduction='none')
+            #     heatmap[initial_mask] = loss
+            #     mmin = heatmap[heatmap > 0].min()
+            #     mmax = heatmap.max()
+            #     heatmap = (heatmap - mmin) / (mmax - mmin)
+            #     heatmap[~initial_mask] = 0.0
+            #     # heatmap = 1 - heatmap
+            #     heatmap = torch.sqrt(1 - torch.square(1 - heatmap))
+            #     heatmap = heatmap.cpu().numpy()
+            #     heatmap = heatmap.reshape(img_size, img_size)
+            #     image = Image.fromarray((heatmap * 255).astype(np.uint8))
+            #     image.save('loss_heatmap.png')
 
             # save distance map
             with torch.no_grad():
