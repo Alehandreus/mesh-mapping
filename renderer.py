@@ -6,10 +6,9 @@ import numpy as np
 import pygame
 import torch
 from renderer_utils import initial_camera_from_mesh, camera_rays_from_pose
-from main import Renderer
-from typing import Dict, Tuple, Any
-from main import PyMesh
-from main import ResidualMap
+from rendering import Renderer
+from mesh_data import PyMesh
+from models import ResidualMap
 
 # ============================================================
 # Interactive progressive rendering loop (pygame)
@@ -260,8 +259,8 @@ if __name__ == "__main__":
     outer_mesh = PyMesh.from_file(outer_path)
 
     ckpt_path = "mapping.pt"
-    inner_net = ResidualMap(inner_mesh.mesh).to(device)
-    outer_net = ResidualMap(outer_mesh.mesh).to(device)
+    inner_net = ResidualMap(inner_mesh.mesh_split).to(device)
+    outer_net = ResidualMap(outer_mesh.mesh_split).to(device)
     ckpt = torch.load(ckpt_path, map_location=device)
     inner_net.load_state_dict(ckpt["inner_net"])
     outer_net.load_state_dict(ckpt["outer_net"])    
