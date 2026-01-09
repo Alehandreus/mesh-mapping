@@ -36,7 +36,7 @@ class Renderer:
 
         colors = torch.zeros((img_size * img_size,), dtype=torch.float32, device=self.device)
         colors[result.mask] = (-dirs[result.mask] * result.normals[result.mask]).sum(dim=1)
-        colors = torch.abs(colors)
+        # colors = torch.abs(colors)
         colors = (colors + 1.0) * 0.5
         colors[~result.mask] = 0.0
         colors = colors.cpu().numpy()

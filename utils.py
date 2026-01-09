@@ -220,6 +220,9 @@ def get_camera_rays(mesh, img_size, device, angle=0.0):
     n_pixels = img_size * img_size
 
     mesh_min, mesh_max = mesh.get_bounds()
+    mesh_min = np.stack([mesh_min[0], mesh_min[2], -mesh_max[1]], axis=0)
+    mesh_max = np.stack([mesh_max[0], mesh_max[2], -mesh_min[1]], axis=0)
+
     max_extent = max(mesh_max - mesh_min)
     center = (mesh_max + mesh_min) * 0.5
 
@@ -260,6 +263,9 @@ def get_camera_rays(mesh, img_size, device, angle=0.0):
 
     d_cam_poses = torch.from_numpy(cam_poses).float().to(device)
     d_dirs = torch.from_numpy(dirs).float().to(device)
+
+    d_cam_poses = torch.stack([d_cam_poses[:, 0], d_cam_poses[:, 2], -d_cam_poses[:, 1]], dim=-1)
+    d_dirs = torch.stack([d_dirs[:, 0], d_dirs[:, 2], -d_dirs[:, 1]], dim=-1)
 
     return d_cam_poses, d_dirs
 

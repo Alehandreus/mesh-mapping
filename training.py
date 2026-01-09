@@ -13,12 +13,18 @@ from mesh_data import PyMesh
 @dataclass
 class TrainingConfig:
     lr: float = 1e-3
-    epochs: int = 200
-    batch_size: int = 100_000
+    # lr = 3e-4
+    # epochs: int = 2000
+    epochs: int = 20000
+    # epochs: int = 1000000
+    # epochs: int = 200
+    # batch_size: int = 100_000
+    batch_size: int = 50_000
     log_interval: int = 100
     n_sample_points: int = 10_000
     out_obj: str = "sampled_points.obj"
     weight_decay: float = 1.0
+    load_optimizer: bool = False
 
 
 def gradient_penalty(critic, real, fake, gp_lambda: float = 10.0) -> torch.Tensor:
@@ -50,7 +56,17 @@ def train_residual_map(
     device = next(net.parameters()).device
 
     net.train()
-    optimizer = torch.optim.AdamW(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    # optimizer = torch.optim.AdamW(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    optimizer = torch.optim.Adam(net.parameters(), lr=cfg.lr)
+
+    if cfg.load_optimizer:
+        print("Loading optimizer state...")
+        optimizer.load_state_dict(torch.load("optimizer_state.pt"))
+        net.load_state_dict(torch.load("mapping.pt")["inner_net"])
+
+    # import tensorboard writer
+    from torch.utils.tensorboard import SummaryWriter
+    writer = SummaryWriter()
 
     print("Starting training...")
     for it in range(1, cfg.epochs + 1):
@@ -60,20 +76,41 @@ def train_residual_map(
         optimizer.zero_grad(set_to_none=True)
         y_pred = net(x=x, barycentrics=barycentrics, face_idxs=face_idxs)
 
-        loss = (y_pred - y).abs().sum(dim=1).mean()
+        loss_cosine = (1.0 - torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6)).mean()
+        loss_angle = torch.acos(
+            torch.clamp(
+                torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6),
+                -1.0 + 1e-7,
+                1.0 - 1e-7,
+            )
+        ).mean()
+        loss_length = (y_pred.norm(dim=1) - y.norm(dim=1)).abs().mean()
+
+        # loss = loss_cosine + loss_length * 2
+        loss = loss_angle + loss_length * 2
+
+        # loss = (y_pred - y).abs().sum(dim=1).mean()
+        # loss = (y_pred - y).square().sum(dim=1).mean() * 1000
         loss.backward()
         optimizer.step()
 
         if it % cfg.log_interval == 0:
-            log_training_state(
-                net=net,
-                orig_mesh=orig_mesh,
-                rough_mesh=rough_mesh,
-                device=device,
-                cfg=cfg,
-                iteration=it,
-                loss=loss,
-            )
+            print(f"[it {it:05d}] loss={loss.item():.10f}; cosine={loss_cosine.item():.10f}; length={loss_length.item():.10f}")
+            writer.add_scalar("Loss/total", loss.item(), it)
+            writer.add_scalar("Loss/cosine", loss_cosine.item(), it)
+            writer.add_scalar("Loss/length", loss_length.item(), it)
+            writer.flush()
+            # log_training_state(
+            #     net=net,
+            #     orig_mesh=orig_mesh,
+            #     rough_mesh=rough_mesh,
+            #     device=device,
+            #     cfg=cfg,
+            #     iteration=it,
+            #     loss=loss,
+            # )
+    
+    torch.save(optimizer.state_dict(), "optimizer_state.pt")
 
 
 @torch.no_grad()

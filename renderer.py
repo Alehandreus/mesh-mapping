@@ -81,6 +81,7 @@ def run_interactive_progressive(
     pygame.display.set_caption("Interactive progressive rendering (pygame)")
     screen = pygame.display.set_mode((img_size, img_size))
     clock = pygame.time.Clock()
+    font = pygame.font.SysFont("DejaVuSans", 18)
 
     captured = True
     pygame.event.set_grab(True)
@@ -215,6 +216,13 @@ def run_interactive_progressive(
 
         surf = pygame.surfarray.make_surface(np.swapaxes(last_img, 0, 1))
         screen.blit(surf, (0, 0))
+
+        # FPS overlay in the screen border
+        fps_text = font.render(f"{clock.get_fps():5.1f} fps", True, (255, 255, 255))
+        fps_rect = fps_text.get_rect(topleft=(8, 8))
+        pygame.draw.rect(screen, (0, 0, 0), fps_rect.inflate(8, 4))
+        screen.blit(fps_text, fps_rect)
+
         pygame.display.flip()
 
     pygame.quit()

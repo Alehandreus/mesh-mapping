@@ -19,12 +19,16 @@ class RaytraceResult:
 class RaytraceConfig:
     epochs: int = 3
     threshold: float = 0.01
+    threshold_edges: float = 0.002
     lr: float = 0.01
-    snap_to_closest: bool = False
+    snap_to_closest: bool = True
 
 
-def get_raytrace_loss(cam_poses: torch.Tensor, dirs: torch.Tensor, y: torch.Tensor, reduction: str = "mean") -> torch.Tensor:
+def get_raytrace_loss(cam_poses, dirs, y, reduction="mean", include_dist=False, dist_scale=0.1):
     distances = torch.cross(y - cam_poses, dirs, dim=1).norm(dim=1)
+    dist_to_origin = (y - cam_poses).norm(dim=1)
+    if include_dist:
+        distances = distances + dist_scale * dist_to_origin
     if reduction == "mean":
         return distances.mean()
     return distances
@@ -51,6 +55,7 @@ def _optimize_hits(
     accepted_x = torch.zeros_like(x0)
     accepted_y = torch.zeros_like(x0)
     accepted_mask = torch.zeros((x0.shape[0],), dtype=torch.bool, device=device)
+    prev_loss_dist = torch.full((x0.shape[0],), float('inf'), device=device)
 
     x = nn.Parameter(x0.clone(), requires_grad=True)
     _, sdf_closests, sdf_barycentrics, sdf_face_idxs = point_query(traverser, x.data, device)
@@ -58,15 +63,26 @@ def _optimize_hits(
     barycentrics.data = sdf_barycentrics
     x.data = sdf_closests
 
-    optimizer = torch.optim.Adam([x], lr=config.lr)
+    # optimizer = torch.optim.Adam([x], lr=config.lr)
+    # optimizer = torch.optim.SGD([x, barycentrics], lr=config.lr, momentum=0.99)
+    optimizer = torch.optim.SGD([x, barycentrics], lr=config.lr, momentum=0.0)
+
+    with torch.no_grad():
+        y = network(x, face_idxs=sdf_face_idxs, barycentrics=barycentrics)
+        per_ray_loss = get_raytrace_loss(cam_poses, dirs, y, reduction="none", include_dist=False)
+        per_ray_loss_dist = get_raytrace_loss(cam_poses, dirs, y, reduction="none", include_dist=True)
+        mask = (per_ray_loss < config.threshold) & (per_ray_loss_dist < prev_loss_dist)
+        prev_loss_dist[mask] = per_ray_loss_dist[mask]
+
+        accepted_x[mask] = x.data[mask]
+        accepted_y[mask] = y[mask]
+        accepted_mask[mask] = True
+
+        if verbose:
+            print("Loss:", per_ray_loss.mean().item())
+            print(f"Accepted {accepted_mask.sum().item()} / {x.shape[0]}")    
 
     for _ in range(config.epochs):
-        with torch.no_grad():
-            _, sdf_closests, sdf_barycentrics, sdf_face_idxs = point_query(traverser, x.data, device)
-            barycentrics.data = sdf_barycentrics
-            if config.snap_to_closest:
-                x.data = sdf_closests
-
         def closure() -> torch.Tensor:
             optimizer.zero_grad()
             y = network(x, face_idxs=sdf_face_idxs, barycentrics=barycentrics)
@@ -77,9 +93,17 @@ def _optimize_hits(
         optimizer.step(closure)
 
         with torch.no_grad():
+            _, sdf_closests, sdf_barycentrics, sdf_face_idxs = point_query(traverser, x.data, device)
+            barycentrics.data = sdf_barycentrics
+            if config.snap_to_closest:
+                x.data = sdf_closests        
+
+        with torch.no_grad():
             y = network(x, face_idxs=sdf_face_idxs, barycentrics=barycentrics)
-            per_ray_loss = get_raytrace_loss(cam_poses, dirs, y, reduction="none")
-            mask = per_ray_loss < config.threshold
+            per_ray_loss = get_raytrace_loss(cam_poses, dirs, y, reduction="none", include_dist=False)
+            per_ray_loss_dist = get_raytrace_loss(cam_poses, dirs, y, reduction="none", include_dist=True)
+            mask = (per_ray_loss < config.threshold) & (per_ray_loss_dist < prev_loss_dist)
+            prev_loss_dist[mask] = per_ray_loss_dist[mask]
 
             accepted_x[mask] = x.data[mask]
             accepted_y[mask] = y[mask]
@@ -90,7 +114,8 @@ def _optimize_hits(
                 print(f"Accepted {accepted_mask.sum().item()} / {x.shape[0]}")
 
     normals = torch.zeros_like(accepted_x)
-    normals[accepted_mask] = accepted_x[accepted_mask] - accepted_y[accepted_mask]
+    normals[accepted_mask] = accepted_y[accepted_mask] - accepted_x[accepted_mask]
+    # print(normals[:10])
     normals[accepted_mask] = normals[accepted_mask] / (normals[accepted_mask].norm(dim=1, keepdim=True) + 1e-12)
 
     return RaytraceResult(x=accepted_x, y=accepted_y, mask=accepted_mask, normals=normals)
@@ -156,10 +181,11 @@ def raytrace_inner_outer(
     normals = torch.zeros((n_rays, 3), dtype=torch.float32, device=device)
     mask = torch.zeros((n_rays,), dtype=torch.bool, device=device)
 
-    outer = raytrace_mesh(cam_poses, dirs, outer_mesh, outer_net, config=config, verbose=verbose)
+    # outer = raytrace_mesh(cam_poses, dirs, outer_mesh, outer_net, config=config, verbose=verbose)
     inner = raytrace_mesh(cam_poses, dirs, inner_mesh, inner_net, config=config, verbose=verbose)
 
-    for res in (outer, inner):  # inner overrides where both are valid to mimic previous ordering
+    # for res in (outer, inner):  # inner overrides where both are valid to mimic previous ordering
+    for res in (inner,):  # inner overrides where both are valid to mimic previous ordering
         if res.mask.any():
             x[res.mask] = res.x[res.mask]
             y[res.mask] = res.y[res.mask]

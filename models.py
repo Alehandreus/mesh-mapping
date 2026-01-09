@@ -5,6 +5,14 @@ import torch.nn.functional as F
 import tinycudann as tcnn
 
 
+def to_network_space(x):
+    return torch.stack([x[:, 0], -x[:, 2], x[:, 1]], dim=-1)
+
+
+def to_world_space(x):
+    return torch.stack([x[:, 0], x[:, 2], -x[:, 1]], dim=-1)
+
+
 class ResidualMap(nn.Module):
     def __init__(self, mesh):
         super().__init__()
@@ -17,10 +25,11 @@ class ResidualMap(nn.Module):
             "otype": "HashGrid",
             "n_levels": 8,
             "n_features_per_level": 4,
-            "log2_hashmap_size": 12,
+            "log2_hashmap_size": 10,
             "base_resolution": 2,
             "per_level_scale": 2,
             "fixed_point_pos": False,
+            # "fixed_point_pos": True,
         }
         self.network_config = {
             "otype": "FullyFusedMLP",
@@ -35,20 +44,32 @@ class ResidualMap(nn.Module):
         # self.encoding = HashVertexEncoding(mesh)
         # self.encoding = TensoRFEncoding(mesh)
         # self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.encoding.n_output_dims
+        # self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
+        # self.n_encoder_dims = self.encoding.n_output_dims
         # self.n_encoder_dims = self.n_input_dims
         self.n_output_dims = 3
 
-        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
+        # self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
         # self.network = tcnn.Network(3, self.n_output_dims, self.network_config)
+
+        self.network = tcnn.NetworkWithInputEncoding(
+            n_input_dims=self.n_input_dims,
+            n_output_dims=self.n_output_dims,
+            encoding_config=self.encoding_config,
+            network_config=self.network_config,
+        )
 
     def forward(self, x, **kwargs):
         x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        x_enc = self.encoding(x, **kwargs).float()
-        delta = self.network(x_enc).float()
+        delta = self.network(x).float()
         y = x + delta
         y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
+
+        # x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
+        # x_enc = self.encoding(x, **kwargs).float()
+        # delta = self.network(x_enc).float()
+        # y = x + delta
+        # y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
 
         # x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
         # delta = self.network(x).float()
