@@ -25,8 +25,8 @@ def load_or_train_networks(orig_mesh: PyMesh, inner_mesh: PyMesh, outer_mesh: Py
     if load_ckpt:
         print(f"Loading checkpoint from {CKPT_PATH}...")
         ckpt = torch.load(CKPT_PATH, map_location=device)
-        inner_net.load_state_dict(ckpt["inner_net"])
-        outer_net.load_state_dict(ckpt["outer_net"])
+        inner_net.load_state_dict(ckpt["inner_net"], strict=False)
+        outer_net.load_state_dict(ckpt["outer_net"], strict=False)
         return inner_net, outer_net
 
     cfg = TrainingConfig()
@@ -35,10 +35,18 @@ def load_or_train_networks(orig_mesh: PyMesh, inner_mesh: PyMesh, outer_mesh: Py
     # train_residual_map(outer_net, orig_mesh, outer_mesh, cfg)
 
     print(f"Saving checkpoint to {CKPT_PATH}...")
+    def to_fp16(state_dict):
+        state_dict = state_dict.copy()
+        for k, v in state_dict.items():
+            if isinstance(v, torch.Tensor) and v.dtype == torch.float32:
+                state_dict[k] = v.half()
+        return state_dict
     torch.save(
         {
-            "inner_net": inner_net.state_dict(),
-            "outer_net": outer_net.state_dict(),
+            # "inner_net": inner_net.state_dict(),
+            # "outer_net": outer_net.state_dict(),
+            "inner_net": to_fp16(inner_net.state_dict()),
+            "outer_net": to_fp16(outer_net.state_dict()),
         },
         CKPT_PATH,
     )
@@ -63,8 +71,10 @@ def render_camera_angle(
     from raytrace import RaytraceConfig
     config = RaytraceConfig()
     config.epochs = 0
+    # config.epochs = 10
     # config.epochs = 100
-    config.lr = 100
+    # config.lr = 100
+    config.lr = 10000
     # config.lr = 1
     # config.threshold = 0.02
     # config.threshold_edges = 0.002
@@ -183,12 +193,12 @@ def main():
     load_optimizer = "--load-optimizer" in sys.argv
 
     mesh_paths = {
-        "orig": "models/petmonster_orig.fbx",
-        "inner": "models/petmonster_inner_2000.fbx",
-        "outer": "models/petmonster_outer_2000.fbx",
-        # "orig": "models/dragon_orig.fbx",
-        # "inner": "models/dragon_inner_3000.fbx",
-        # "outer": "models/dragon_outer_3000.fbx",
+        # "orig": "models/petmonster_orig.fbx",
+        # "inner": "models/petmonster_inner_2000.fbx",
+        # "outer": "models/petmonster_outer_2000.fbx",
+        "orig": "models/dragon_orig.fbx",
+        "inner": "models/dragon_outer_3000.fbx",
+        "outer": "models/dragon_outer_3000.fbx",
         # "orig": "models/superdragon_orig.fbx",
         # "inner": "models/superdragon_inner_5000.fbx",
         # "outer": "models/superdragon_outer_5000.fbx",

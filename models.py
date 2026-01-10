@@ -24,7 +24,7 @@ class ResidualMap(nn.Module):
         self.encoding_config = {
             "otype": "HashGrid",
             "n_levels": 8,
-            "n_features_per_level": 4,
+            "n_features_per_level": 8,
             "log2_hashmap_size": 10,
             "base_resolution": 2,
             "per_level_scale": 2,
@@ -36,7 +36,7 @@ class ResidualMap(nn.Module):
             "activation": "ReLU",
             "output_activation": "None",
             "n_neurons": 64,
-            "n_hidden_layers": 2,
+            "n_hidden_layers": 4,
         }
 
         self.n_input_dims = 3
@@ -49,6 +49,15 @@ class ResidualMap(nn.Module):
         # self.n_encoder_dims = self.n_input_dims
         self.n_output_dims = 3
 
+        # self.network = nn.Sequential(
+        #     nn.Linear(self.n_encoder_dims, 64),
+        #     nn.ReLU(),
+        #     nn.Linear(64, 64),
+        #     nn.ReLU(),
+        #     nn.Linear(64, 64),
+        #     nn.ReLU(),
+        #     nn.Linear(64, self.n_output_dims),
+        # )
         # self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
         # self.network = tcnn.Network(3, self.n_output_dims, self.network_config)
 
@@ -62,6 +71,13 @@ class ResidualMap(nn.Module):
     def forward(self, x, **kwargs):
         x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
         delta = self.network(x).float()
+        # out = self.network(x).float()
+        # length, theta, phi = out[:, 0], out[:, 1], out[:, 2]
+        # delta = torch.stack([
+        #     length * torch.sin(theta) * torch.cos(phi),
+        #     length * torch.sin(theta) * torch.sin(phi),
+        #     length * torch.cos(theta),
+        # ], dim=-1)
         y = x + delta
         y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
 
