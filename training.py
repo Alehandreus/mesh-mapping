@@ -13,36 +13,18 @@ from mesh_data import PyMesh
 @dataclass
 class TrainingConfig:
     lr: float = 1e-3
-    # lr = 3e-4
-    # epochs: int = 2000
-    epochs: int = 20000
-    # epochs: int = 1000000
-    # epochs: int = 200
+    # lr = 1e-4
+    # epochs: int = 2_000
+    epochs: int = 20_000
+    # epochs: int = 100_000
+    # epochs: int = 4_000_000
     # batch_size: int = 100_000
     batch_size: int = 50_000
-    log_interval: int = 100
+    log_interval: int = 200
     n_sample_points: int = 10_000
     out_obj: str = "sampled_points.obj"
     weight_decay: float = 1.0
     load_optimizer: bool = False
-
-
-def gradient_penalty(critic, real, fake, gp_lambda: float = 10.0) -> torch.Tensor:
-    bsz = real.size(0)
-    eps = torch.rand(bsz, 1, device=real.device)
-    interp = eps * real + (1 - eps) * fake
-    interp.requires_grad_(True)
-    scores = critic(interp)
-    grad = autograd.grad(
-        outputs=scores,
-        inputs=interp,
-        grad_outputs=torch.ones_like(scores),
-        create_graph=True,
-        retain_graph=True,
-        only_inputs=True,
-    )[0]
-    gp = ((grad.norm(2, dim=1) - 1.0) ** 2).mean()
-    return gp_lambda * gp
 
 
 def train_residual_map(
@@ -57,7 +39,10 @@ def train_residual_map(
 
     net.train()
     # optimizer = torch.optim.AdamW(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    # optimizer = torch.optim.Adam(net.parameters(), lr=cfg.lr)
     optimizer = torch.optim.Adam(net.parameters(), lr=cfg.lr)
+
+    lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.epochs, eta_min=cfg.lr * 0.1)
 
     if cfg.load_optimizer:
         print("Loading optimizer state...")
@@ -67,6 +52,9 @@ def train_residual_map(
     # import tensorboard writer
     from torch.utils.tensorboard import SummaryWriter
     writer = SummaryWriter()
+
+    import time
+    last_time = time.time()
 
     print("Starting training...")
     for it in range(1, cfg.epochs + 1):
@@ -79,23 +67,27 @@ def train_residual_map(
         loss_cosine = (1.0 - torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6)).mean()
         loss_angle = torch.acos(
             torch.clamp(
-                torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6),
+                torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-7),
                 -1.0 + 1e-7,
                 1.0 - 1e-7,
             )
         ).mean()
         loss_length = (y_pred.norm(dim=1) - y.norm(dim=1)).abs().mean()
+        # loss_length_sq = (y_pred.norm(dim=1) - y.norm(dim=1)).square().mean()
 
         # loss = loss_cosine + loss_length * 2
-        loss = loss_angle + loss_length * 2
+        # loss = loss_angle #+ loss_length * 2
+        loss = loss_angle + loss_length * 100# * 0.1
 
         # loss = (y_pred - y).abs().sum(dim=1).mean()
         # loss = (y_pred - y).square().sum(dim=1).mean() * 1000
         loss.backward()
         optimizer.step()
+        lr_scheduler.step()
 
         if it % cfg.log_interval == 0:
-            print(f"[it {it:05d}] loss={loss.item():.10f}; cosine={loss_cosine.item():.10f}; length={loss_length.item():.10f}")
+            print(f"[it {it:05d}] loss={loss.item():.10f}; cosine={loss_cosine.item():.10f}; length={loss_length.item():.10f}; time={(time.time() - last_time):.2f}s")
+            last_time = time.time()
             writer.add_scalar("Loss/total", loss.item(), it)
             writer.add_scalar("Loss/cosine", loss_cosine.item(), it)
             writer.add_scalar("Loss/length", loss_length.item(), it)
@@ -109,6 +101,16 @@ def train_residual_map(
             #     iteration=it,
             #     loss=loss,
             # )
+
+    log_training_state(
+        net=net,
+        orig_mesh=orig_mesh,
+        rough_mesh=rough_mesh,
+        device=device,
+        cfg=cfg,
+        iteration=it,
+        loss=loss,
+    )            
     
     torch.save(optimizer.state_dict(), "optimizer_state.pt")
 
@@ -141,4 +143,4 @@ def log_training_state(net, orig_mesh: PyMesh, rough_mesh: PyMesh, device, cfg: 
         "mapped_mesh_preview.png", 512, 512, orig_mesh.mesh.get_c(), orig_mesh.mesh.get_R()
     )
 
-    print(f"[it {iteration:05d}] loss={loss.item():.10f}")
+    # print(f"[it {iteration:05d}] loss={loss.item():.10f}")

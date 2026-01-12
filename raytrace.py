@@ -117,6 +117,7 @@ def _optimize_hits(
     normals[accepted_mask] = accepted_y[accepted_mask] - accepted_x[accepted_mask]
     # print(normals[:10])
     normals[accepted_mask] = normals[accepted_mask] / (normals[accepted_mask].norm(dim=1, keepdim=True) + 1e-12)
+    normals[accepted_mask] = -normals[accepted_mask]
 
     return RaytraceResult(x=accepted_x, y=accepted_y, mask=accepted_mask, normals=normals)
 

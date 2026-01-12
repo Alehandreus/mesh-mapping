@@ -8,6 +8,7 @@ from models import ResidualMap
 from raytrace import RaytraceResult, raytrace_inner_outer
 from training import TrainingConfig, train_residual_map
 from utils import get_camera_rays
+from utils import sample_points, point_query
 
 
 CKPT_PATH = "mapping.pt"
@@ -86,9 +87,9 @@ def render_camera_angle(
         result: RaytraceResult = raytrace_inner_outer(cam_poses, dirs, inner_mesh, outer_mesh, inner_net, outer_net, config=config, verbose=True)
 
     loss = get_raytrace_loss(cam_poses, dirs, result.y, reduction="none")
-    outer_mask, _, _ = outer_mesh.ray_tracer.trace(cam_poses, dirs)
+    outer_mask, outer_t, _ = outer_mesh.ray_tracer.trace(cam_poses, dirs)
     orig_mask, orig_t, orig_normals = orig_mesh.ray_tracer.trace(cam_poses, dirs)
-    inner_mask, _, _ = inner_mesh.ray_tracer.trace(cam_poses, dirs)
+    inner_mask, inner_t, _ = inner_mesh.ray_tracer.trace(cam_poses, dirs)
 
     mask_1 = orig_mask & (~inner_mask)
     mask_2 = outer_mask & (~orig_mask)
@@ -115,22 +116,36 @@ def render_camera_angle(
     print(f"Image accuracy (matching orig mesh intersections): {img_acc * 100:.2f}%")
 
     orig_y = cam_poses + dirs * orig_t[:, None]
-    img_mse = ((result.y[orig_mask] - orig_y[orig_mask]) ** 2).sum(dim=1).mean().item() if orig_mask.any() else 0.0
-    print(f"Image MSE on orig mesh intersections: {img_mse:.6f}")
+    inner_y = cam_poses + dirs * inner_t[:, None]
+    _, inner_proj_y, _, _ = point_query(orig_mesh.traverser, inner_y, device)
+    inner_proj_normals = inner_y - inner_proj_y
+    inner_proj_normals = inner_proj_normals / (inner_proj_normals.norm(dim=1, keepdim=True) + 1e-12)
+    
+    # img_mse = ((result.y[orig_mask] - orig_y[orig_mask]) ** 2).sum(dim=1).mean().item() if orig_mask.any() else 0.0
+    # print(f"Image MSE on orig mesh intersections: {img_mse:.6f}")
 
     # compute mean cosine between result.normals and orig_normals where orig_mask is True
-    if orig_mask.any():
-        cos_sim = (result.normals[orig_mask] * orig_normals[orig_mask]).sum(dim=1)
-        mean_cos_sim = cos_sim.mean().item()
-    else:
-        mean_cos_sim = 0.0
-    print(f"Mean cosine similarity of normals on orig mesh intersections: {mean_cos_sim:.6f}")
+    # if orig_mask.any():
+    #     cos_sim = (result.normals[orig_mask] * orig_normals[orig_mask]).sum(dim=1)
+    #     mean_cos_sim = cos_sim.mean().item()
+    # else:
+    #     mean_cos_sim = 0.0
+    # print(f"Mean cosine similarity of normals on orig mesh intersections: {mean_cos_sim:.6f}")
 
-    print(f"Mean pixel error: {(result.normals[orig_mask] - orig_normals[orig_mask]).square().mean()}")
+    # print(f"Mean pixel error: {(result.normals[orig_mask] - inner_proj_normals[orig_mask]).square().mean()}")
 
     distance_image = _distance_map_image(result, cam_poses, img_size)
-    normal_image = _normal_shading_image(result, dirs, img_size)    
+    normal_image = _normal_shading_image(result, dirs, img_size)
+    cache = result.normals.clone()
+    result.normals[result.mask] = inner_proj_normals[result.mask]
+    normal_image_true = _normal_shading_image(result, dirs, img_size)
+    result.normals = cache
     loss_image = _loss_heatmap_image(get_raytrace_loss(cam_poses, dirs, result.y, reduction="none"), img_size, result.mask)
+
+    mse = np.square(np.array(normal_image) - np.array(normal_image_true)).mean()
+    print(f"Pixel MSE: {mse}")
+
+    normal_image_true.save("normal_shading_true.png")
 
     def total_variation(img: Image.Image) -> float:
         img_np = np.array(img).astype(np.float32) / 255.0
@@ -196,11 +211,14 @@ def main():
         # "orig": "models/petmonster_orig.fbx",
         # "inner": "models/petmonster_inner_2000.fbx",
         # "outer": "models/petmonster_outer_2000.fbx",
-        "orig": "models/dragon_orig.fbx",
-        "inner": "models/dragon_outer_3000.fbx",
-        "outer": "models/dragon_outer_3000.fbx",
+        "orig": "models/dragon2_orig.fbx",
+        "inner": "models/dragon2_outer_2000.fbx",
+        "outer": "models/dragon2_outer_2000.fbx",
+        # "orig": "models/dragon_orig.fbx",
+        # "inner": "models/dragon_outer_2000.fbx",
+        # "outer": "models/dragon_outer_2000.fbx",
         # "orig": "models/superdragon_orig.fbx",
-        # "inner": "models/superdragon_inner_5000.fbx",
+        # "inner": "models/superdragon_outer_5000.fbx",
         # "outer": "models/superdragon_outer_5000.fbx",
         # "orig": "models/monkey_orig.fbx",
         # "inner": "models/monkey_inner_1000.fbx",
@@ -211,8 +229,11 @@ def main():
     }
 
     orig_mesh = PyMesh.from_file(mesh_paths["orig"])
-    inner_mesh = PyMesh.from_file(mesh_paths["inner"])
-    outer_mesh = PyMesh.from_file(mesh_paths["outer"])
+    scale = 1 / (orig_mesh.mesh.get_bounds()[1] - orig_mesh.mesh.get_bounds()[0]).max()
+    # scale = 1
+    orig_mesh = PyMesh.from_file(mesh_paths["orig"], scale=scale)
+    inner_mesh = PyMesh.from_file(mesh_paths["inner"], scale=scale)
+    outer_mesh = PyMesh.from_file(mesh_paths["outer"], scale=scale)
 
     save_mesh_previews({"outer": outer_mesh, "inner": inner_mesh, "orig": orig_mesh}, size=512)
 

@@ -14,8 +14,12 @@ class PyMesh:
     ray_tracer: GPURayTracer
 
     @classmethod
-    def from_file(cls, path: str, *, n_samples: int = 1000_000, bvh_depth: int = 25) -> "PyMesh":
+    def from_file(cls, path: str, *, n_samples: int = 1000_000, bvh_depth: int = 25, scale=None) -> "PyMesh":
         mesh = Mesh.from_file(path, True)
+        if scale is not None:
+            vertices = mesh.get_vertices()
+            vertices = vertices * scale
+            mesh = Mesh.from_data(vertices, mesh.get_faces())
 
         builder = CPUBuilder(mesh)
         bvh = builder.build_bvh(bvh_depth)

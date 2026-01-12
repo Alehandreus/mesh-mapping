@@ -25,7 +25,7 @@ class ResidualMap(nn.Module):
             "otype": "HashGrid",
             "n_levels": 8,
             "n_features_per_level": 8,
-            "log2_hashmap_size": 10,
+            "log2_hashmap_size": 20,
             "base_resolution": 2,
             "per_level_scale": 2,
             "fixed_point_pos": False,
