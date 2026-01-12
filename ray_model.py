@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 
 DEVICE = 'cuda'
 LEARNING_RATE = 1e-2
-EPOCHS = 5000
+EPOCHS = 20000
 LOG_INTERVAL = 100
 
 IMG_SIZE = 512
@@ -34,29 +34,32 @@ def calculate_normals(faces, vertices, face_ids):
     return normals / np.linalg.norm(normals, axis=1)[:, None]
 
 def sample_directions(normals):
-    thetas = np.random.uniform(0, np.pi, size=normals.shape[0])
-    phis = np.random.uniform(0, 2 * np.pi, size=normals.shape[0])
+    thetas = np.random.uniform(np.pi / 6, 5 * np.pi / 6, size=normals.shape[0])
+    phis = np.random.uniform(np.pi / 6, 5 * np.pi / 6, size=normals.shape[0])
 
     x_norm = np.sin(thetas) * np.cos(phis)
     y_norm = np.sin(thetas) * np.sin(phis)
     z_norm = np.cos(thetas)
     vector = np.stack([x_norm, y_norm, z_norm], axis=1)
 
+    #basis_x_norm = np.zeros(normals.shape)
+    #mask_x = normals[:, 0] != 0
+    #basis_x_norm[mask_x] = d / normals[:, 0] 
     basis_x_norm = np.ones(normals.shape)
     mask = normals[:, 2] != 0
     basis_x_norm[mask, 2] = -(normals[mask, 0] + normals[mask, 1]) / normals[mask, 2]
     basis_x_norm[~mask, 2] = 0
     basis_x_norm = basis_x_norm / np.linalg.norm(basis_x_norm, axis=1)[:, None]
-    basis_y_norm = -normals
+    basis_y_norm = -normals / np.linalg.norm(normals, axis=1)[:, None]
     basis_z_norm = np.cross(basis_x_norm, basis_y_norm, axis=1)
-    basis_coefs = np.stack([basis_x_norm, basis_y_norm, basis_z_norm], axis=1)
+    basis_coefs = np.stack([basis_x_norm, basis_y_norm, basis_z_norm], axis=2)
 
     prop_ds = np.einsum('ijk,ik->ij', basis_coefs, vector)
     return torch.tensor(prop_ds, device=DEVICE)
 
 def main():
     fine_path = "models/monkey_fine.fbx"
-    rough_path = "models/monkey_convex_hull2.fbx"
+    rough_path = "models/monkey_convex_hull3.fbx"   
     #rough_path = "models/monkey_rough2.fbx"
     #fine_path = "models/queen_fine.fbx"
     #rough_path = "models/queen_rough.fbx"
@@ -65,6 +68,8 @@ def main():
     #fine_path = "models/petmonster.fbx"
     #rough_path = "models/petmonster_rough.fbx"
     #rough_path = "models/sphere.fbx"
+    #fine_path = "models/dragon_orig.fbx"
+    #rough_path = "models/dragon_outer_3000.fbx"
 
 
     sample_size = 100000
@@ -75,12 +80,14 @@ def main():
     while len(rough_mesh_split.get_vertices()) < 1000000: # subdivide each primitive until we have enough vertices
         rough_mesh_split.split_faces(0.5)
 
-    rough_mesh = Mesh.from_file(rough_path)
-    rough_sampler = GPUMeshSampler(rough_mesh, MeshSamplerMode.SURFACE_UNIFORM, sample_size)
+    rough_mesh = Mesh.from_file(rough_path)    
     rough_builder = CPUBuilder(rough_mesh)
     rough_bvh = rough_builder.build_bvh(25)
+    rough_mesh = Mesh.from_data(rough_bvh.get_vertices(), rough_bvh.get_faces())
+    rough_sampler = GPUMeshSampler(rough_mesh, MeshSamplerMode.SURFACE_UNIFORM, sample_size)
     rough_traverser = GPUTraverser(rough_bvh)
     rough_ray_tracer = GPURayTracer(rough_bvh)
+
     rough_faces = rough_mesh.get_faces()
     rough_vertices = rough_mesh.get_vertices()
 
@@ -90,50 +97,79 @@ def main():
     sphere_vertices = sphere_mesh.get_vertices()
 
     fine_mesh = Mesh.from_file(fine_path)
-    fine_sampler = GPUMeshSampler(fine_mesh, MeshSamplerMode.SURFACE_UNIFORM, sample_size)
     fine_builder = CPUBuilder(fine_mesh)
     fine_bvh = fine_builder.build_bvh(25)
+    fine_mesh = Mesh.from_data(fine_bvh.get_vertices(), fine_bvh.get_faces())
+    fine_sampler = GPUMeshSampler(fine_mesh, MeshSamplerMode.SURFACE_UNIFORM, sample_size)
     fine_traverser = GPUTraverser(fine_bvh)
     fine_ray_tracer = GPURayTracer(fine_bvh)
 
     rough_mesh.save_preview(f"rough_mesh_preview.png", IMG_SIZE, IMG_SIZE, rough_mesh.get_c(), rough_mesh.get_R())
 
     model = RayModel(rough_mesh).to(DEVICE)
-    model_intersection = RayModel(rough_mesh).to(DEVICE)
-    model_normal = RayNormalModel(rough_mesh).to(DEVICE)
+    #model_intersection = RayModel(rough_mesh).to(DEVICE)
+    #model_normal = RayNormalModel(rough_mesh).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    optimizer_intersection = torch.optim.Adam(model_intersection.parameters(), lr=LEARNING_RATE)
-    optimizer_normal = torch.optim.Adam(model_normal.parameters(), lr=LEARNING_RATE)
+    #optimizer_intersection = torch.optim.Adam(model_intersection.parameters(), lr=LEARNING_RATE)
+    #optimizer_normal = torch.optim.Adam(model_normal.parameters(), lr=LEARNING_RATE)
 
     for epoch in range(EPOCHS):
-        x, _, face_idxs_sp = sample_points(sphere_sampler, sample_size, DEVICE)
-        x = x.clone()
-        face_idxs_sp = face_idxs_sp.clone()
+        #x, _, face_idxs_sp = sample_points(sphere_sampler, sample_size, DEVICE)
+        #x = x.clone()
+        #face_idxs_sp = face_idxs_sp.clone()
 
         x_src2, barycentrics2, face_idxs2 = sample_points(rough_sampler, sample_size, DEVICE)
 
         normals2 = calculate_normals(rough_faces, rough_vertices, face_idxs2.detach().cpu().numpy())
-        normals1 = calculate_normals(sphere_faces, sphere_vertices, face_idxs_sp.detach().cpu().numpy())
+        #normals1 = calculate_normals(sphere_faces, sphere_vertices, face_idxs_sp.detach().cpu().numpy())
         
 
 
-        ds1 = sample_directions(normals1)
+        #ds1 = sample_directions(normals1)
         ds2 = sample_directions(normals2)
        
-        mask, t, normals = rough_ray_tracer.trace(x, ds1)
-        mask = mask.clone()
-        x_src1 = x + ds1 * t[:, None]
+        #mask, t, normals = rough_ray_tracer.trace(x, ds1)
+        #mask = mask.clone()
+        #x_src1 = x + ds1 * t[:, None]
 
-        _, _, barycentrics1, face_idxs1 = point_query(rough_traverser, x_src1, DEVICE)
+        #_, _, barycentrics1, face_idxs1 = point_query(rough_traverser, x_src1, DEVICE)
 
         
-        mask1, true_r1, normals_traced = fine_ray_tracer.trace(x_src1, ds1)
-        mask1 = mask1.clone()
-        true_r1 = true_r1.clone()
-        normals_traced = normals_traced.clone()
+        #mask1, true_r1, normals_traced = fine_ray_tracer.trace(x_src1, ds1)
+        #mask1 = mask1.clone()
+        #true_r1 = true_r1.clone()
+        #normals_traced = normals_traced.clone()
         
         #mask1[true_r1 < 0] = 0
-        mask2, true_r2, _ = fine_ray_tracer.trace(x_src2, ds2)
+        #mask1[true_r1 > 0.3] = 0
+        mask2, true_r2, normals_traced = fine_ray_tracer.trace(x_src2, ds2)
+        mask2[true_r2 < 0] = 0
+        #mask2[true_r2 > 0.3] = 0
+        
+        #n = np.array([1, 1, 1])
+        #test_normals = np.repeat(n[None, ...], 1000, axis=0)
+        #test_ds = sample_directions(test_normals)
+
+        '''with open("lines.obj", "w") as f:
+
+            for i in range(test_ds.shape[0]):
+                f.write(f"v {0} {0} {0}\n")
+                f.write(f"v {test_ds[i, 0]} {test_ds[i, 1]} {test_ds[i, 2]}\n")
+                f.write(f"l {2 * i + 1} {2 * i + 2}\n")'''
+        
+
+        '''with open("lines.obj", "w") as f:
+            amount = 1
+            for i in range(x_src2.shape[0]):
+                if true_r2[i] < 0:
+                    f.write(f"v {x_src2[i, 0]} {x_src2[i, 1]} {x_src2[i, 2]}\n")
+                    end = x_src2[i] + 0.1 * ds2[i]
+                    f.write(f"v {end[0]} {end[1]} {end[2]}\n")
+                    f.write(f"l {2 * amount - 1} {2 * amount}\n")
+                    amount += 1
+                if amount > 100:
+                    return'''
+
         #mask2 = mask2 & mask #???
         #mask2[true_r2 < 0] = 0
 
@@ -141,21 +177,23 @@ def main():
         #mask1 = true_r1 > 0
         #print(true_r[true_r > 0].sum())
     
-        prediction = model_intersection(torch.concatenate([x_src2, ds2], dim=1), barycentrics=barycentrics2, face_idxs=face_idxs2)
+        #prediction = model_intersection(torch.concatenate([x_src2, ds2], dim=1), barycentrics=barycentrics2, face_idxs=face_idxs2)
         #prediction = model_intersection(points2)
         #print(prediction.shape)
-        has_intersection = prediction[:, 0]
+        #has_intersection = prediction[:, 0]
 
-        prediction = model(torch.concatenate([x_src1, ds1], dim=1), barycentrics=barycentrics1, face_idxs=face_idxs1)
+        prediction = model(torch.concatenate([x_src2, ds2], dim=1), barycentrics=barycentrics2, face_idxs=face_idxs2)
         #prediction = model(points1)
-        predicted_r = prediction[:, 0]
+        has_intersection = prediction[:, 0]
+        predicted_r = prediction[:, 1]
+        predicted_normal = prediction[:, 2:]
        
         true_has_intersection = mask2.to(torch.float16)
         #true_has_intersection[true_has_intersection == 1] -= 0.2
         #true_has_intersection[true_has_intersection == 0] += 0.2
 
-        prediction = model_normal(torch.concatenate([x_src1, ds1], dim=1), barycentrics=barycentrics1, face_idxs=face_idxs1)
-        predicted_normal = prediction[:, :3]
+        #prediction = model_normal(torch.concatenate([x_src2, ds2], dim=1), barycentrics=barycentrics2, face_idxs=face_idxs2)
+        #predicted_normal = prediction[:, :3]
         #predicted_normal = torch.zeros(normalized.shape, device=DEVICE, dtype=normalized.dtype)
         #predicted_normal[normalized.norm(dim=1) > 0.01] = normalized / normalized.norm(dim=1)[:, None]
         
@@ -167,35 +205,36 @@ def main():
         entropy = (entropy * weights).mean()
 
         
-        
         #distance = ((predicted_r[mask1] - true_r1[mask1]) ** 2).mean()
-        distance = (predicted_r[mask1] - true_r1[mask1]).abs().mean() 
+        distance = (predicted_r[mask2] - true_r2[mask2]).abs().mean() 
         
         #loss = distance + entropy
         #loss = (predicted_r - true_r[mask]).abs().mean()
 
-        normal_error = ((predicted_normal[mask1] - normals_traced[mask1]) ** 2).mean()
+        normal_error = ((predicted_normal[mask2] - normals_traced[mask2]) ** 2).mean()
+
+        loss = 10 * distance + entropy + 10 * normal_error
 
         optimizer.zero_grad()
-        optimizer_intersection.zero_grad()
-        optimizer_normal.zero_grad()
-        #loss.backward()
-        distance.backward()
+        #optimizer_intersection.zero_grad()
+        #optimizer_normal.zero_grad()
+        loss.backward()
+        #distance.backward()
         optimizer.step()
-        entropy.backward()
-        optimizer_intersection.step()
-        normal_error.backward()
-        optimizer_normal.step()
+        #entropy.backward()
+        #optimizer_intersection.step()
+        #normal_error.backward()
+        #optimizer_normal.step()
 
         if (epoch + 1) % LOG_INTERVAL == 0:
             print("EPOCH:", epoch, "distance =", distance.item(), "entr =", entropy.item(), "norm =", normal_error.item())
             print((has_intersection > 0).sum().item(), mask2.sum().item())
 
             plt.clf()
-            plt.hist(true_r1[mask1].detach().cpu().numpy(), bins=30, edgecolor="red", range=(-2, 2))
+            plt.hist(true_r2[mask2].detach().cpu().numpy(), bins=30, edgecolor="red", range=(-2, 2))
             plt.savefig('train_hist.png')
             plt.clf()
-            plt.hist(predicted_r[mask1].detach().cpu().numpy(), bins=30, edgecolor="red", range=(-2, 2))
+            plt.hist(predicted_r[mask2].detach().cpu().numpy(), bins=30, edgecolor="red", range=(-2, 2))
             plt.savefig('train_hist_pred.png')
 
 
@@ -208,27 +247,29 @@ def main():
     t_sdf, sdf_pts, barycentrics, face_idxs = point_query(rough_traverser, pts[mask], DEVICE)
 
     model.eval()
-    prediction = model_intersection(torch.concatenate([pts[mask], dirs[mask]], dim=1), barycentrics=barycentrics, face_idxs=face_idxs)
+    #prediction = model_intersection(torch.concatenate([pts[mask], dirs[mask]], dim=1), barycentrics=barycentrics, face_idxs=face_idxs)
     
-    has_intersection = nn.Sigmoid()(prediction[:, 0])
+    #has_intersection = nn.Sigmoid()(prediction[:, 0])
     prediction = model(torch.concatenate([pts[mask], dirs[mask]], dim=1), barycentrics=barycentrics, face_idxs=face_idxs)
    
-    predicted_r = prediction[:, 0]
+    has_intersection = nn.Sigmoid()(prediction[:, 0])
+    predicted_r = prediction[:, 1]
+    predicted_normal = prediction[:, 2:]
    
     intersected_mask = has_intersection > 0.5
 
     pts_masked = pts[mask]
     dirs_masked = dirs[mask]
 
-    prediction = model_normal(torch.concatenate([pts[mask], dirs[mask]], dim=1), barycentrics=barycentrics, face_idxs=face_idxs)
-    predicted_normal = prediction[:, :3]
+    #prediction = model_normal(torch.concatenate([pts[mask], dirs[mask]], dim=1), barycentrics=barycentrics, face_idxs=face_idxs)
+    #predicted_normal = prediction[:, :3]
     #predicted_normal = predicted_normal / predicted_normal.norm(dim=1)[:, None]
 
     predicted_points = pts_masked[intersected_mask] + dirs_masked[intersected_mask] * predicted_r[intersected_mask][:, None] 
     
     mask_true, true_r, normals_traced = fine_ray_tracer.trace(pts, dirs)
-    print("true", (torch.sort(true_r, dim=0, descending=True))[0])
-    print("true mean", true_r1.mean())
+    #print("true", (torch.sort(true_r, dim=0, descending=True))[0])
+    #print("true mean", true_r1.mean())
 
     whole_intesected_mask = mask.clone()
     whole_intesected_mask[mask] = intersected_mask
@@ -309,8 +350,8 @@ def main():
         image = Image.fromarray((pixel_map * 255).astype(np.uint8))
         image.save('render.png')
 
-    torch.save(model.state_dict(), 'model_distance.pt')
-    torch.save(model_intersection.state_dict(), 'model_intersection.pt')
+    torch.save(model.state_dict(), 'model.pt')
+    #torch.save(model_intersection.state_dict(), 'model_intersection.pt')
 
 if __name__ == "__main__":
     main()

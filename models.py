@@ -139,11 +139,11 @@ class VertexEncoder(nn.Module):
         super().__init__()
 
         self.emb_size = 16
-        self.n_output_dims = self.emb_size
+        self.n_output_dims = self.emb_size + 3
 
         self.n_vertices = mesh.get_num_vertices()
         self.embeddings = nn.Embedding(self.n_vertices, self.emb_size)
-        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
+        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.1)
 
         self.faces = mesh.get_faces()
         self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
@@ -160,6 +160,11 @@ class VertexEncoder(nn.Module):
         emb = (barycentrics[:, 0, None] * v0_emb +
                barycentrics[:, 1, None] * v1_emb +
                barycentrics[:, 2, None] * v2_emb)
+        
+        emb = torch.concatenate([
+            emb,
+            x,
+        ], dim=-1)
         
         return emb
 
@@ -189,14 +194,14 @@ class RayModel(nn.Module):
             "n_hidden_layers": 4,
         }
 
-        self.points_amount = 1
+        self.points_amount = 2
         self.n_input_dims = 3
-        self.encoding = VertexEncoder(mesh)
-        self.dir_encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        #self.encoding = TensoRFEncoder(mesh)
+        #self.encoding = VertexEncoder(mesh)
         #self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.dir_encoding.n_output_dims * self.points_amount + self.encoding.n_output_dims
-        self.n_output_dims = 1
+        #self.encoding = TensoRFEncoder(mesh)
+        self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
+        self.n_encoder_dims = self.encoding.n_output_dims * self.points_amount #+ self.encoding.n_output_dims
+        self.n_output_dims = 5
 
         self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
 
@@ -205,18 +210,18 @@ class RayModel(nn.Module):
         x[:, :3] = (x[:, :3] - self.mesh_min) / (self.mesh_max - self.mesh_min)
         #x = x.reshape(x.shape[0], self.points_amount, 3)
         #x = (x - self.mesh_min[None, None, :]) / (self.mesh_max[None, None, :] - self.mesh_min[None, None, :])
-        #x = x.reshape(x.shape[0] * self.points_amount, 3)
+        x = x.reshape(x.shape[0] * self.points_amount, 3)
         
-        #x_enc = self.encoding(x[:, :3]).float()
-        x_enc = self.encoding(x[:, :3], kwargs["face_idxs"], kwargs["barycentrics"]).float()
-        x_dirs_enc = self.dir_encoding(x[:, 3:6]).float()
-        #x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
+        x_enc = self.encoding(x[:, :6]).float()
+        #x_enc = self.encoding(x[:, :3], kwargs["face_idxs"], kwargs["barycentrics"]).float()
+        #x_dirs_enc = self.dir_encoding(x[:, 3:6]).float()
+        x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
         #print(x_enc.shape)
         #print(self.network)
         #x = self.rays_to_unit_plucker4(x[:, :3], x[:, 3:])
         #x_enc = self.encoding(x).float()
         
-        x_enc = torch.cat([x_enc, x_dirs_enc], dim=1)
+        #x_enc = torch.cat([x_enc, x_dirs_enc], dim=1)
        
         delta = self.network(x_enc)
         #y = x + delta
@@ -224,7 +229,7 @@ class RayModel(nn.Module):
         return delta
     
 
-class RayNormalModel(nn.Module):
+class RayVertexModel(nn.Module):
     def __init__(self, mesh):
         super().__init__()
 
@@ -253,8 +258,8 @@ class RayNormalModel(nn.Module):
         self.n_input_dims = 3
         self.encoding = VertexEncoder(mesh)
         #self.encoding = TensoRFEncoder(mesh)
-        #self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.encoding.n_output_dims * self.points_amount
+        self.dir_encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
+        self.n_encoder_dims = self.dir_encoding.n_output_dims * self.points_amount + self.encoding.n_output_dims
         self.n_output_dims = 3
 
         self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
@@ -264,8 +269,63 @@ class RayNormalModel(nn.Module):
         x[:, :3] = (x[:, :3] - self.mesh_min) / (self.mesh_max - self.mesh_min)
         #x = x.reshape(x.shape[0] * self.points_amount, 3)
         #x_enc = self.encoding(x[:, :6]).float()
-        x_enc = self.encoding(x[:, :6], kwargs["face_idxs"], kwargs["barycentrics"]).float()
-        x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
+        #x_enc = self.encoding(x[:, :6], kwargs["face_idxs"], kwargs["barycentrics"]).float()
+        #x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
+        x_enc = self.encoding(x[:, :3], kwargs["face_idxs"], kwargs["barycentrics"]).float()
+        x_dirs_enc = self.dir_encoding(x[:, 3:6]).float()
 
+        x_enc = torch.cat([x_enc, x_dirs_enc], dim=1)
+        
+        delta = self.network(x_enc)
+        return delta
+    
+
+class RayNormalModel(nn.Module):
+    def __init__(self, mesh):
+        super().__init__()
+
+        mesh_min, mesh_max = mesh.get_bounds()
+        self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
+        self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
+
+        self.encoding_config = {
+            "otype": "HashGrid",
+            "n_levels": 18,
+            "n_features_per_level": 4,
+            "log2_hashmap_size": 10,
+            "base_resolution": 2,
+            "per_level_scale": 2,
+            "fixed_point_pos": False,
+        }
+        self.network_config = {
+            "otype": "FullyFusedMLP",
+            "activation": "LeakyReLU",
+            "output_activation": "None",
+            "n_neurons": 64,
+            "n_hidden_layers": 4,
+        }
+
+        self.points_amount = 2
+        self.n_input_dims = 3
+        #self.encoding = VertexEncoder(mesh)
+        #self.encoding = TensoRFEncoder(mesh)
+        self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
+        self.n_encoder_dims = self.encoding.n_output_dims * self.points_amount #+ self.encoding.n_output_dims
+        self.n_output_dims = 3
+
+        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
+
+
+    def forward(self, x, **kwargs):
+        x[:, :3] = (x[:, :3] - self.mesh_min) / (self.mesh_max - self.mesh_min)
+        x = x.reshape(x.shape[0] * self.points_amount, 3)
+        x_enc = self.encoding(x[:, :6]).float()
+        #x_enc = self.encoding(x[:, :6], kwargs["face_idxs"], kwargs["barycentrics"]).float()
+        x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
+        #x_enc = self.encoding(x[:, :3], kwargs["face_idxs"], kwargs["barycentrics"]).float()
+        #x_enc = self.dir_encoding(x[:, :6]).float()
+
+        #x_enc = torch.cat([x_enc, x_dirs_enc], dim=1)
+        
         delta = self.network(x_enc)
         return delta
