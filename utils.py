@@ -23,7 +23,7 @@ class MeshWrapper:
 
     @classmethod
     def from_file(cls, path, *, n_max_samples = 1_000_000, bvh_depth = 25, scale=None):
-        mesh = Mesh.from_file(path, True)
+        mesh = Mesh.from_file(path, False)
         if scale is not None:
             vertices = mesh.get_vertices()
             vertices = vertices * scale

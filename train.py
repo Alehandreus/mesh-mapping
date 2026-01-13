@@ -53,7 +53,7 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
 
         # loss = loss_cosine + loss_length * 2
         # loss = loss_angle #+ loss_length * 2
-        loss = loss_angle + loss_length * 100
+        loss = loss_angle + loss_length * 0.001
         # loss = (y_pred - y).abs().sum(dim=1).mean()
         # loss = (y_pred - y).square().sum(dim=1).mean() * 1000
 
@@ -146,10 +146,8 @@ def train_entry(cfg):
 
     if checkpoint is not None:
         random_idx = time.time()
-        checkpoint_name = f"/tmp/{random_idx}.pt"
-        torch.save(checkpoint_data, checkpoint_name)
         cfg_for_render = copy.deepcopy(cfg)
-        cfg_for_render.render.model_checkpoint = checkpoint_name
+        cfg_for_render.render.model_checkpoint = cfg.train.model_checkpoint
         cfg_for_render.render.use_inner = True
         cfg_for_render.render.use_outer = True
         render_logs = render_entry(cfg_for_render)
