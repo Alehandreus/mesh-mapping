@@ -5,61 +5,19 @@ import torch.nn.functional as F
 import tinycudann as tcnn
 
 
-def to_network_space(x):
-    return torch.stack([x[:, 0], -x[:, 2], x[:, 1]], dim=-1)
-
-
-def to_world_space(x):
-    return torch.stack([x[:, 0], x[:, 2], -x[:, 1]], dim=-1)
-
-
-class ResidualMap(nn.Module):
-    def __init__(self, mesh):
+class DisplacementModel(nn.Module):
+    def __init__(self, cfg_model, mesh):
         super().__init__()
 
         mesh_min, mesh_max = mesh.get_bounds()
         self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
         self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
 
-        self.encoding_config = {
-            "otype": "HashGrid",
-            "n_levels": 8,
-            "n_features_per_level": 8,
-            "log2_hashmap_size": 20,
-            "base_resolution": 2,
-            "per_level_scale": 2,
-            "fixed_point_pos": False,
-            # "fixed_point_pos": True,
-        }
-        self.network_config = {
-            "otype": "FullyFusedMLP",
-            "activation": "ReLU",
-            "output_activation": "None",
-            "n_neurons": 64,
-            "n_hidden_layers": 4,
-        }
+        self.encoding_config = cfg_model.encoding_config
+        self.network_config = cfg_model.network_config
 
         self.n_input_dims = 3
-        # self.encoding = VertexEncoding(mesh)
-        # self.encoding = HashVertexEncoding(mesh)
-        # self.encoding = TensoRFEncoding(mesh)
-        # self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        # self.encoding = HashGridEncoding(self.n_input_dims, self.encoding_config)
-        # self.n_encoder_dims = self.encoding.n_output_dims
-        # self.n_encoder_dims = self.n_input_dims
         self.n_output_dims = 3
-
-        # self.network = nn.Sequential(
-        #     nn.Linear(self.n_encoder_dims, 64),
-        #     nn.ReLU(),
-        #     nn.Linear(64, 64),
-        #     nn.ReLU(),
-        #     nn.Linear(64, 64),
-        #     nn.ReLU(),
-        #     nn.Linear(64, self.n_output_dims),
-        # )
-        # self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
-        # self.network = tcnn.Network(3, self.n_output_dims, self.network_config)
 
         self.network = tcnn.NetworkWithInputEncoding(
             n_input_dims=self.n_input_dims,
@@ -71,161 +29,6 @@ class ResidualMap(nn.Module):
     def forward(self, x, **kwargs):
         x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
         delta = self.network(x).float()
-        # out = self.network(x).float()
-        # length, theta, phi = out[:, 0], out[:, 1], out[:, 2]
-        # delta = torch.stack([
-        #     length * torch.sin(theta) * torch.cos(phi),
-        #     length * torch.sin(theta) * torch.sin(phi),
-        #     length * torch.cos(theta),
-        # ], dim=-1)
         y = x + delta
         y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
-
-        # x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        # x_enc = self.encoding(x, **kwargs).float()
-        # delta = self.network(x_enc).float()
-        # y = x + delta
-        # y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
-
-        # x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        # delta = self.network(x).float()
-        # y = x + delta
-        # y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
-
         return y
-
-
-class TensoRFEncoding(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        try:
-            from TensoRF.models.tensoRF import TensorVM
-        except ImportError:
-            raise ImportError("Please clone TensoRF repository")
-
-        self.encoder = TensorVM(
-            # aabb=torch.tensor(mesh.get_bounds(), dtype=torch.float32, device='cuda'),
-            aabb = torch.tensor([
-                [0.0, 0.0, 0.0],
-                [1.0, 1.0, 1.0],
-            ], dtype=torch.float32, device='cuda'),
-            device='cuda',
-
-            gridSize=[128] * 3,
-            appearance_n_comp=4,
-            density_n_comp=1,
-        )
-
-        self.n_output_dims = 3 * self.encoder.app_n_comp
-
-    def compute_appfeature(self, xyz_sampled):
-        coordinate_plane = torch.stack((
-            xyz_sampled[..., self.encoder.matMode[0]],
-            xyz_sampled[..., self.encoder.matMode[1]],
-            xyz_sampled[..., self.encoder.matMode[2]],
-        )).detach().view(3, -1, 1, 2)
-        coordinate_line = torch.stack((
-            xyz_sampled[..., self.encoder.vecMode[0]],
-            xyz_sampled[..., self.encoder.vecMode[1]],
-            xyz_sampled[..., self.encoder.vecMode[2]],
-        ))
-        coordinate_line = torch.stack((torch.zeros_like(coordinate_line), coordinate_line), dim=-1).detach().view(3, -1, 1, 2)
-        
-        plane_feats = F.grid_sample(self.encoder.plane_coef[:, :self.encoder.app_n_comp], coordinate_plane, align_corners=True).view(3 * self.encoder.app_n_comp, -1)
-        line_feats = F.grid_sample(self.encoder.line_coef[:, :self.encoder.app_n_comp], coordinate_line, align_corners=True).view(3 * self.encoder.app_n_comp, -1)
-
-        return (plane_feats * line_feats).T
-
-    def forward(self, x, **kwargs):
-        return self.compute_appfeature(x)
-    
-
-class VertexEncoding(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        self.emb_size = 16
-        self.n_output_dims = self.emb_size + 3
-
-        self.n_vertices = mesh.get_num_vertices()
-        self.embeddings = nn.Embedding(self.n_vertices, self.emb_size)
-        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
-
-        self.faces = mesh.get_faces()
-        # self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
-        self.faces = torch.from_numpy(self.faces).long().cuda()
-
-    def forward(self, x, face_idxs, barycentrics):
-        v0_idxs = self.faces[face_idxs, 0]
-        v1_idxs = self.faces[face_idxs, 1]
-        v2_idxs = self.faces[face_idxs, 2]
-
-        v0_emb = self.embeddings(v0_idxs)
-        v1_emb = self.embeddings(v1_idxs)
-        v2_emb = self.embeddings(v2_idxs)
-
-        emb = (barycentrics[:, 0, None] * v0_emb +
-               barycentrics[:, 1, None] * v1_emb +
-               barycentrics[:, 2, None] * v2_emb)
-        
-        emb = torch.concatenate([
-            emb,
-            x * 0,
-        ], dim=-1)
-        
-        return emb
-    
-
-class HashVertexEncoding(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        self.emb_size = 4 * 1
-        self.n_output_dims = self.emb_size + 3
-        self.n_vertices = mesh.get_num_vertices()
-        self.grid_size = self.n_vertices // 8
-
-        self.embeddings = nn.Embedding(self.grid_size, self.emb_size)
-        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
-
-        self.faces = mesh.get_faces()
-        self.faces = torch.from_numpy(self.faces).long().cuda()
-
-    def forward(self, x, face_idxs, barycentrics):
-        v0_idxs = self.faces[face_idxs, 0]
-        v1_idxs = self.faces[face_idxs, 1]
-        v2_idxs = self.faces[face_idxs, 2]
-
-        v0_hash = self.vertex_hash(v0_idxs)
-        v1_hash = self.vertex_hash(v1_idxs)
-        v2_hash = self.vertex_hash(v2_idxs)
-
-        v0_emb = self.embeddings(v0_hash)
-        v1_emb = self.embeddings(v1_hash)
-        v2_emb = self.embeddings(v2_hash)
-
-        emb = (barycentrics[:, 0, None] * v0_emb +
-               barycentrics[:, 1, None] * v1_emb +
-               barycentrics[:, 2, None] * v2_emb)
-        
-        emb = torch.concatenate([
-            emb,
-            x * 0,
-        ], dim=-1)
-        
-        return emb
-
-    def vertex_hash(self, vertex_idx):
-        magic_prime = 2654435761
-        return (vertex_idx ^ magic_prime) % self.grid_size
-    
-
-class HashGridEncoding(nn.Module):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-        self.encoding = tcnn.Encoding(*args, **kwargs)
-        self.n_output_dims = self.encoding.n_output_dims
-    
-    def forward(self, x, **kwargs):
-        return self.encoding(x)
