@@ -44,7 +44,7 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
         loss_cosine = (1.0 - torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6)).mean()
         loss_angle = torch.acos(
             torch.clamp(
-                torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-7),
+                torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6),
                 -1.0 + 1e-7,
                 1.0 - 1e-7,
             )
@@ -53,7 +53,7 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
 
         # loss = loss_cosine + loss_length * 2
         # loss = loss_angle #+ loss_length * 2
-        loss = loss_angle + loss_length * 0.001
+        loss = loss_angle + loss_length #* 0.1
         # loss = (y_pred - y).abs().sum(dim=1).mean()
         # loss = (y_pred - y).square().sum(dim=1).mean() * 1000
 
@@ -162,6 +162,9 @@ def train_entry(cfg):
             writer.add_scalar(f"Validation/Inner_MSE_nogd", mse_nogd_inner, inner_step + outer_step)
             writer.add_scalar(f"Validation/Outer_MSE_nogd", mse_nogd_outer, inner_step + outer_step)
             writer.flush()
+
+        inner_net.network.params.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_dir}/inner_params.bin")
+        outer_net.network.params.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_dir}/outer_params.bin")
     
     ##### outer training loop #####
     for _ in range(cfg.train.steps_total // cfg.train.steps_per_epoch):
