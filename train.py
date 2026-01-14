@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.autograd as autograd
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.swa_utils import AveragedModel, SWALR
 import copy
 from mesh_utils import Mesh
 from utils import sample_points, point_query, MeshWrapper, ShellType, save_mesh_previews
@@ -30,7 +31,7 @@ def build_mapped_mesh(net, orig_mesh, rough_mesh, device, cfg):
     return mapped_mesh
 
 
-def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, optimizer, lr_scheduler, shell_type):    
+def train_single_shell_epoch(cfg, writer, step, model, aver_model, rough_mesh, orig_mesh, optimizer, lr_scheduler, swa_scheduler, shell_type):    
     model.train()
     print(f"Training one {shell_type.name} epoch...")
     last_time = time.time()
@@ -44,7 +45,7 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
         loss_cosine = (1.0 - torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6)).mean()
         loss_angle = torch.acos(
             torch.clamp(
-                torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-6),
+                torch.nn.functional.cosine_similarity(y_pred - x, y - x, dim=1, eps=1e-7),
                 -1.0 + 1e-7,
                 1.0 - 1e-7,
             )
@@ -53,12 +54,16 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
 
         # loss = loss_cosine + loss_length * 2
         # loss = loss_angle #+ loss_length * 2
-        loss = loss_angle + loss_length #* 0.1
+        loss = loss_angle + loss_length * 0.001
         # loss = (y_pred - y).abs().sum(dim=1).mean()
         # loss = (y_pred - y).square().sum(dim=1).mean() * 1000
 
         loss.backward()
         optimizer.step()
+        if cfg.train.use_averaged_model in ['EMA', 'SWA']:
+            aver_model.update_parameters(model)
+        if cfg.train.use_averaged_model == 'SWA':
+            swa_scheduler.step()
         lr_scheduler.step()
 
         if (it % cfg.train.print_interval == 0):
@@ -107,12 +112,26 @@ def train_entry(cfg):
     ##### model ####
     inner_net = DisplacementModel(cfg_model, inner_mesh.mesh).to(cfg.device)
     outer_net = DisplacementModel(cfg_model, outer_mesh.mesh).to(cfg.device)
+
+    if cfg.train.use_averaged_model == 'EMA':
+        aver_inner_net = AveragedModel(inner_net, multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(cfg.train.ema_decay))
+        aver_outer_net = AveragedModel(outer_net, multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(cfg.train.ema_decay))
+    elif cfg.train.use_averaged_model == 'SWA':
+        aver_inner_net = AveragedModel(inner_net)
+        aver_outer_net = AveragedModel(outer_net)
+    else:
+        aver_inner_net = None
+        aver_outer_net = None
+
     if checkpoint is not None:
         print("Loading model state...")
         inner_net.load_state_dict(checkpoint["inner_net"]["model"])
         outer_net.load_state_dict(checkpoint["outer_net"]["model"])
         inner_step = checkpoint["inner_net"]["step"]
         outer_step = checkpoint["outer_net"]["step"]
+        if cfg.train.use_averaged_model in ['EMA', 'SWA']:
+            aver_inner_net.load_state_dict(checkpoint["aver_inner_net"])
+            aver_outer_net.load_state_dict(checkpoint["aver_outer_net"])
 
     #### optimizer ####
     optimizer_inner = torch.optim.Adam(inner_net.parameters(), lr=cfg.train.lr)
@@ -134,6 +153,13 @@ def train_entry(cfg):
         eta_min=cfg.train.lr * cfg.train.lr_scheduler_min,
     )
 
+    if cfg.train.use_averaged_model == 'SWA':
+        swa_scheduler_inner = SWALR(optimizer_inner, swa_lr=cfg.train.swa_lr)
+        swa_scheduler_outer = SWALR(optimizer_outer, swa_lr=cfg.train.swa_lr)
+    else:
+        swa_scheduler_inner = None
+        swa_scheduler_outer = None
+
     #### tensorboard ####
     writer = None
     if cfg.train.tensorboard:
@@ -154,26 +180,29 @@ def train_entry(cfg):
 
         mse_nogd_inner = render_logs["mse_nogd_inner"]
         mse_nogd_outer = render_logs["mse_nogd_outer"]
+        psnr_nogd_inner = render_logs["psnr_nogd_inner"]
+        psnr_nogd_outer = render_logs["psnr_nogd_outer"]
 
         print(f"[VALIDATION] Inner shell Pixel MSE (no GD): {mse_nogd_inner}")
+        print(f"[VALIDATION] Inner shell Pixel PSNR (no GD): {psnr_nogd_inner}")
         print(f"[VALIDATION] Outer shell Pixel MSE (no GD): {mse_nogd_outer}")
+        print(f"[VALIDATION] Outer shell Pixel PSNR (no GD): {psnr_nogd_outer}")
 
         if cfg.train.tensorboard:
             writer.add_scalar(f"Validation/Inner_MSE_nogd", mse_nogd_inner, inner_step + outer_step)
             writer.add_scalar(f"Validation/Outer_MSE_nogd", mse_nogd_outer, inner_step + outer_step)
+            writer.add_scalar(f"Validation/Inner_PSNR_nogd", psnr_nogd_inner, inner_step + outer_step)
+            writer.add_scalar(f"Validation/Outer_PSNR_nogd", psnr_nogd_outer, inner_step + outer_step)
             writer.flush()
-
-        inner_net.network.params.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_dir}/inner_params.bin")
-        outer_net.network.params.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_dir}/outer_params.bin")
     
     ##### outer training loop #####
     for _ in range(cfg.train.steps_total // cfg.train.steps_per_epoch):
         if cfg.train.train_inner:
             train_single_shell_epoch(
                 cfg, writer,
-                inner_step, inner_net,
+                inner_step, inner_net, aver_inner_net,
                 inner_mesh, orig_mesh,
-                optimizer_inner, lr_scheduler_inner,
+                optimizer_inner, lr_scheduler_inner, swa_scheduler_inner,
                 ShellType.INNER,
             )
             inner_step += cfg.train.steps_per_epoch
@@ -181,9 +210,9 @@ def train_entry(cfg):
         if cfg.train.train_outer:
             train_single_shell_epoch(
                 cfg, writer,
-                outer_step, outer_net,
+                outer_step, outer_net, aver_outer_net,
                 outer_mesh, orig_mesh,
-                optimizer_outer, lr_scheduler_outer,
+                optimizer_outer, lr_scheduler_outer, swa_scheduler_outer,
                 ShellType.OUTER,
             )
             outer_step += cfg.train.steps_per_epoch
@@ -202,6 +231,10 @@ def train_entry(cfg):
             },
         }
 
+        if cfg.train.use_averaged_model in ['EMA', 'SWA']:
+            checkpoint_data["aver_inner_net"] = aver_inner_net.state_dict()
+            checkpoint_data["aver_outer_net"] = aver_outer_net.state_dict()
+
         random_idx = time.time()
         checkpoint_name = f"/tmp/{random_idx}.pt"
         torch.save(checkpoint_data, checkpoint_name)
@@ -213,13 +246,19 @@ def train_entry(cfg):
 
         mse_nogd_inner = render_logs["mse_nogd_inner"]
         mse_nogd_outer = render_logs["mse_nogd_outer"]
+        psnr_nogd_inner = render_logs["psnr_nogd_inner"]
+        psnr_nogd_outer = render_logs["psnr_nogd_outer"]
 
         print(f"[VALIDATION] Inner shell Pixel MSE (no GD): {mse_nogd_inner}")
+        print(f"[VALIDATION] Inner shell Pixel PSNR (no GD): {psnr_nogd_inner}")
         print(f"[VALIDATION] Outer shell Pixel MSE (no GD): {mse_nogd_outer}")
+        print(f"[VALIDATION] Outer shell Pixel PSNR (no GD): {psnr_nogd_outer}")
 
         if cfg.train.tensorboard:
             writer.add_scalar(f"Validation/Inner_MSE_nogd", mse_nogd_inner, inner_step + outer_step)
             writer.add_scalar(f"Validation/Outer_MSE_nogd", mse_nogd_outer, inner_step + outer_step)
+            writer.add_scalar(f"Validation/Inner_PSNR_nogd", psnr_nogd_inner, inner_step + outer_step)
+            writer.add_scalar(f"Validation/Outer_PSNR_nogd", psnr_nogd_outer, inner_step + outer_step)
             writer.flush()
 
         checkpoint_name = f"{cfg.train.checkpoints_dir}/{inner_step}_{outer_step}_{cfg.mesh_name}_{mse_nogd_inner * 100:.2f}_{mse_nogd_outer * 100:.2f}.pt"
