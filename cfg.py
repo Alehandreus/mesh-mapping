@@ -55,6 +55,9 @@ cfg.train.run_name = None
 cfg.train.train_inner = False
 cfg.train.train_outer = True
 
+# can be 'EMA' or 'SWA', other strings mean that no averaged model used
+cfg.train.use_averaged_model = 'EMA'
+
 # if not None, load model and optimizer state from given checkpoint
 cfg.train.model_checkpoint = None
 # cfg.train.model_checkpoint = "/home/me/brain/mesh-mapping/checkpoints/0_400000_chess_3.56_0.02.pt"
@@ -70,6 +73,9 @@ cfg.train.batch_size = 50_000
 cfg.train.print_interval = 500
 cfg.train.tensorboard_interval = 1
 
+cfg.train.ema_decay = 0.999
+cfg.train.swa_lr = 1e-3
+
 ##### RENDERING #####
 
 cfg.render = SimpleNamespace()
@@ -78,7 +84,7 @@ cfg.render.use_inner = False
 cfg.render.use_outer = True
 
 cfg.render.angle = 0.0
-cfg.render.img_size = 512
+cfg.render.img_size = 1024
 
 cfg.render.gd_steps = 30
 cfg.render.gd_lr = 0.1

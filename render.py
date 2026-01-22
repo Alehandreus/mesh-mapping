@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.optim.swa_utils import AveragedModel
 from utils import get_camera_rays, MeshWrapper, point_query, ShellType, save_mesh_previews
 from PIL import Image
 import numpy as np
@@ -157,8 +158,16 @@ def render_entry(cfg):
     inner_net = DisplacementModel(cfg_model, inner_mesh.mesh).to(cfg.device)
     outer_net = DisplacementModel(cfg_model, outer_mesh.mesh).to(cfg.device)
     print("Loading model state...")
-    inner_net.load_state_dict(checkpoint["inner_net"]["model"])
-    outer_net.load_state_dict(checkpoint["outer_net"]["model"])
+    if cfg.train.use_averaged_model == 'EMA':
+        aver_inner_net = AveragedModel(inner_net, multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(cfg.train.ema_decay))
+        aver_outer_net = AveragedModel(outer_net, multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(cfg.train.ema_decay))
+        aver_inner_net.load_state_dict(checkpoint["aver_inner_net"])
+        aver_outer_net.load_state_dict(checkpoint["aver_outer_net"])
+        inner_net = aver_inner_net.module
+        outer_net = aver_outer_net.module
+    else:
+        inner_net.load_state_dict(checkpoint["inner_net"]["model"])
+        outer_net.load_state_dict(checkpoint["outer_net"]["model"])
     
     #### shoot camera rays ####
     cam_poses, dirs = get_camera_rays(orig_mesh.mesh, img_size=cfg.render.img_size, device=cfg.device, angle=cfg.render.angle, distance_scale=cfg.render.distance_scale)
@@ -226,8 +235,11 @@ def render_entry(cfg):
         true_colors_nogd_inner_img.save(f"{cfg.render.output_dir}/true_colors_nogd_inner.png")
 
         mse = np.square(pred_colors_inner - true_colors_nogd_inner).mean()
+        psnr = np.log10(1 / mse) * 10
         print(f"Inner shell Pixel MSE: {mse}")
+        print(f"Inner shell Pixel PSNR: {psnr}")
         logs["mse_nogd_inner"] = mse
+        logs["psnr_nogd_inner"] = psnr
 
         raytrace_loss = get_raytrace_loss(cam_poses[inner_mask], dirs[inner_mask], inner_result.y[inner_mask], reduction="none")
         loss_map = torch.zeros((img_size * img_size,), dtype=torch.float32, device=cfg.device)
@@ -248,8 +260,11 @@ def render_entry(cfg):
         true_colors_nogd_outer_img.save(f"{cfg.render.output_dir}/true_colors_nogd_outer.png")
 
         mse = np.square(pred_colors_outer - true_colors_nogd_outer).mean()
+        psnr = np.log10(1 / mse) * 10
         print(f"Outer shell Pixel MSE: {mse}")
+        print(f"Outer shell Pixel PSNR: {psnr}")
         logs["mse_nogd_outer"] = mse
+        logs["psnr_nogd_outer"] = psnr
 
         raytrace_loss = get_raytrace_loss(cam_poses[outer_mask], dirs[outer_mask], outer_result.y[outer_mask], reduction="none")
         loss_map = torch.zeros((img_size * img_size,), dtype=torch.float32, device=cfg.device)
