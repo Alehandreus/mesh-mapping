@@ -46,9 +46,10 @@ def optimize_hits(cfg, cam_poses, dirs, traverser, network, x0, shell_type):
     barycentrics.data = sdf_barycentrics
     x.data = sdf_closests
 
-    # optimizer = torch.optim.Adam([x], lr=config.lr)
+    optimizer = torch.optim.Adam([x], lr=cfg.render.gd_lr)
     # optimizer = torch.optim.SGD([x, barycentrics], lr=config.lr, momentum=0.99)
-    optimizer = torch.optim.SGD([x, barycentrics], lr=cfg.render.gd_lr, momentum=0.0)
+    # optimizer = torch.optim.SGD([x, barycentrics], lr=cfg.render.gd_lr, momentum=0.0)
+    scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=cfg.render.gd_lr_scheduler_min, total_iters=cfg.render.gd_steps)
 
     with torch.no_grad():
         y = network(x)
@@ -71,6 +72,7 @@ def optimize_hits(cfg, cam_poses, dirs, traverser, network, x0, shell_type):
         loss = get_raytrace_loss(cam_poses, dirs, y)
         loss.backward()
         optimizer.step()
+        scheduler.step()
 
         with torch.no_grad():
             _, sdf_closests, sdf_barycentrics, _ = point_query(traverser, x.data, cfg.device)
@@ -159,7 +161,7 @@ def render_entry(cfg):
     outer_net.load_state_dict(checkpoint["outer_net"]["model"])
     
     #### shoot camera rays ####
-    cam_poses, dirs = get_camera_rays(orig_mesh.mesh, img_size=cfg.render.img_size, device=cfg.device, angle=cfg.render.angle)
+    cam_poses, dirs = get_camera_rays(orig_mesh.mesh, img_size=cfg.render.img_size, device=cfg.device, angle=cfg.render.angle, distance_scale=cfg.render.distance_scale)
     dirs = dirs / dirs.norm(dim=1, keepdim=True)
 
     n_rays = cam_poses.shape[0]
@@ -227,6 +229,14 @@ def render_entry(cfg):
         print(f"Inner shell Pixel MSE: {mse}")
         logs["mse_nogd_inner"] = mse
 
+        raytrace_loss = get_raytrace_loss(cam_poses[inner_mask], dirs[inner_mask], inner_result.y[inner_mask], reduction="none")
+        loss_map = torch.zeros((img_size * img_size,), dtype=torch.float32, device=cfg.device)
+        loss_map[inner_mask] = raytrace_loss
+        loss_map = loss_map / raytrace_loss.max()
+        loss_map = loss_map.cpu().numpy().reshape(img_size, img_size)
+        loss_map_img = Image.fromarray((loss_map * 255).astype(np.uint8))
+        loss_map_img.save(f"{cfg.render.output_dir}/raytrace_loss_inner.png")
+
     if cfg.render.use_outer:
         pred_colors_outer, pred_colors_outer_img = shade_lambert(outer_result, dirs, img_size)
         pred_colors_outer_img.save(f"{cfg.render.output_dir}/pred_colors_outer.png")
@@ -240,6 +250,21 @@ def render_entry(cfg):
         mse = np.square(pred_colors_outer - true_colors_nogd_outer).mean()
         print(f"Outer shell Pixel MSE: {mse}")
         logs["mse_nogd_outer"] = mse
+
+        raytrace_loss = get_raytrace_loss(cam_poses[outer_mask], dirs[outer_mask], outer_result.y[outer_mask], reduction="none")
+        loss_map = torch.zeros((img_size * img_size,), dtype=torch.float32, device=cfg.device)
+        loss_map[outer_mask] = raytrace_loss
+        loss_map = loss_map / raytrace_loss.max()
+        loss_map = loss_map.cpu().numpy().reshape(img_size, img_size)
+        loss_map_img = Image.fromarray((loss_map * 255).astype(np.uint8))
+        loss_map_img.save(f"{cfg.render.output_dir}/raytrace_loss_outer.png")
+
+    gt_img = torch.zeros((img_size * img_size), dtype=torch.float32, device=cfg.device)
+    gt_img[orig_mask] = (-dirs[orig_mask] * orig_normals[orig_mask]).sum(dim=-1).clamp(min=0.0)
+    gt_img[orig_mask] = (gt_img[orig_mask] + 1.0) * 0.5
+    gt_img = gt_img.cpu().numpy().reshape(img_size, img_size)
+    gt_img_pil = Image.fromarray((gt_img * 255).astype(np.uint8))
+    gt_img_pil.save(f"{cfg.render.output_dir}/gt_colors.png")
 
     return logs
 

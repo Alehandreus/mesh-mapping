@@ -70,7 +70,7 @@ def point_query(traverser, points, device):
     return t, closest_pts, barycentrics, face_idxs.long()
 
 
-def get_camera_rays(mesh, img_size, device, angle=0.0):
+def get_camera_rays(mesh, img_size, device, angle=0.0, distance_scale=1.0):
     """
     angle: rotation around the object in radians (positive = CCW around +Z).
            angle=0 keeps the original camera pose.
@@ -92,15 +92,15 @@ def get_camera_rays(mesh, img_size, device, angle=0.0):
     theta = base_theta + angle
 
     cam_pos = np.array([
-        center[0] + r_xy * np.cos(theta),
-        center[1] + r_xy * np.sin(theta),
-        center[2] + max_extent * 0.5,   # keep the same "slightly top" height
+        center[0] + r_xy * np.cos(theta) * distance_scale,
+        center[1] + r_xy * np.sin(theta) * distance_scale,
+        center[2] + max_extent * 0.5 * distance_scale,   # keep the same "slightly top" height
     ], dtype=np.float32)
 
     cam_poses = np.tile(cam_pos, (n_pixels, 1))
 
     # forward vector (keep same scaling as your original code)
-    cam_dir = (center - cam_pos) * 0.9
+    cam_dir = (center - cam_pos) * 0.9 / distance_scale
 
     up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 

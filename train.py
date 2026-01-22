@@ -50,10 +50,14 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
             )
         ).mean()
         loss_length = (y_pred.norm(dim=1) - y.norm(dim=1)).abs().mean()
+        loss_length_sq = (y_pred.norm(dim=1) - y.norm(dim=1)).square().mean()
+
+        # print(f"GT length: {y[:10].norm(dim=1)}")
+        # print(f"Pred length: {y_pred[:10].norm(dim=1)}")
 
         # loss = loss_cosine + loss_length * 2
         # loss = loss_angle #+ loss_length * 2
-        loss = loss_angle + loss_length #* 0.1
+        loss = loss_angle + loss_length_sq * 10
         # loss = (y_pred - y).abs().sum(dim=1).mean()
         # loss = (y_pred - y).square().sum(dim=1).mean() * 1000
 
@@ -67,7 +71,8 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
             print(
                 f"[{shell_type.name} it {it:07d}] "
                 f"loss={loss.item():.10f}; cosine={loss_cosine.item():.10f}; "
-                f"length={loss_length.item():.10f}; time={time_diff:.2f}s"
+                f"length={loss_length.item():.10f}; time={time_diff:.2f}s; "
+                f"length_sq={loss_length_sq.item():.10f}"
             )
         
         if cfg.train.tensorboard and (it % cfg.train.tensorboard_interval == 0):
@@ -80,6 +85,16 @@ def train_single_shell_epoch(cfg, writer, step, model, rough_mesh, orig_mesh, op
     mapped_mesh = build_mapped_mesh(model, orig_mesh, rough_mesh, cfg.device, cfg)
     save_mesh_previews({f"{cfg.train.previews_dir}/{shell_type.name}_mapped_mesh.png": mapped_mesh})
 
+    points_sampled, barycentrics_mapped, face_idxs_mapped = sample_points(
+        rough_mesh.sampler, 100000, cfg.device
+    )
+    points_mapped = model(points_sampled)
+
+    os.makedirs("misc", exist_ok=True)
+    with open("misc/sampled_points.obj", "w", encoding="utf-8") as f:
+        for p in points_mapped:
+            f.write(f"v {p[0]} {p[2]} {-p[1]}\n")
+
 
 def train_entry(cfg):
     if cfg.train.model_checkpoint is not None:
@@ -90,9 +105,9 @@ def train_entry(cfg):
         cfg_model = cfg.model
 
     #### meshes ####
-    orig_mesh  = MeshWrapper.from_file(cfg.orig_mesh,  n_max_samples=cfg.mesh_n_max_samples, scale=1.0)
-    inner_mesh = MeshWrapper.from_file(cfg.inner_mesh, n_max_samples=cfg.mesh_n_max_samples, scale=1.0)
-    outer_mesh = MeshWrapper.from_file(cfg.outer_mesh, n_max_samples=cfg.mesh_n_max_samples, scale=1.0)
+    orig_mesh  = MeshWrapper.from_file(cfg.orig_mesh,  n_max_samples=cfg.mesh_n_max_samples)
+    inner_mesh = MeshWrapper.from_file(cfg.inner_mesh, n_max_samples=cfg.mesh_n_max_samples)
+    outer_mesh = MeshWrapper.from_file(cfg.outer_mesh, n_max_samples=cfg.mesh_n_max_samples)
 
     os.makedirs(cfg.train.previews_dir, exist_ok=True)
     save_mesh_previews({
