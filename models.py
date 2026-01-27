@@ -1,331 +1,49 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import tinycudann as tcnn
 
 
-class ResidualMap(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        mesh_min, mesh_max = mesh.get_bounds()
-        self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
-        self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
-
-        self.encoding_config = {
-            "otype": "HashGrid",
-            "n_levels": 8,
-            "n_features_per_level": 2,
-            "log2_hashmap_size": 10,
-            "base_resolution": 2,
-            "per_level_scale": 2,
-            "fixed_point_pos": False,
-        }
-        self.network_config = {
-            "otype": "FullyFusedMLP",
-            "activation": "ReLU",
-            "output_activation": "None",
-            "n_neurons": 128,
-            "n_hidden_layers": 2,
-        }
-
-        self.n_input_dims = 3
-        #self.encoding = VertexEncoder(mesh)
-        #self.encoding = TensoRFEncoder(mesh)
-        #self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = 6   
-        self.n_output_dims = 1
-
-        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
-
-    def forward(self, x, **kwargs):
-        #x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        #x_enc = self.encoding(x, **kwargs).float()
-        delta = self.network(x)
-        #y = x + delta
-        #y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
-        return delta
-
-
-class Critic(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        mesh_min, mesh_max = mesh.get_bounds()
-        self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
-        self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
-
-        self.encoding_config = {
-            "otype": "HashGrid",
-            "n_levels": 8,
-            "n_features_per_level": 2,
-            "log2_hashmap_size": 18,
-            "base_resolution": 2,
-            "per_level_scale": 2,
-            "fixed_point_pos": False,
-        }
-        self.network_config = {
-            "otype": "FullyFusedMLP",
-            "activation": "ReLU",
-            "output_activation": "None",
-            "n_neurons": 64,
-            "n_hidden_layers": 4,
-        }
-
-        self.n_input_dims = 3
-        self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.encoding.n_output_dims
-        self.n_output_dims = 1
-
-        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)        
-
-    def forward(self, x, **kwargs):
-        x = (x - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        x_enc = self.encoding(x).float()
-        out = self.network(x_enc).squeeze(-1)
-        return out
-
-
-
-class TensoRFEncoder(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        try:
-            from TensoRF.models.tensoRF import TensorVM
-        except ImportError:
-            raise ImportError("Please clone TensoRF repository")
-
-        self.encoder = TensorVM(
-            # aabb=torch.tensor(mesh.get_bounds(), dtype=torch.float32, device='cuda'),
-            aabb = torch.tensor([
-                [0.0, 0.0, 0.0],
-                [1.0, 1.0, 1.0],
-            ], dtype=torch.float32, device='cuda'),
-            device='cuda',
-
-            gridSize=[128] * 3,
-            appearance_n_comp=4,
-            density_n_comp=1,
-        )
-
-        self.n_output_dims = 3 * self.encoder.app_n_comp
-
-    def compute_appfeature(self, xyz_sampled):
-        coordinate_plane = torch.stack((
-            xyz_sampled[..., self.encoder.matMode[0]],
-            xyz_sampled[..., self.encoder.matMode[1]],
-            xyz_sampled[..., self.encoder.matMode[2]],
-        )).detach().view(3, -1, 1, 2).to(torch.float32)
-       
-        coordinate_line = torch.stack((
-            xyz_sampled[..., self.encoder.vecMode[0]],
-            xyz_sampled[..., self.encoder.vecMode[1]],
-            xyz_sampled[..., self.encoder.vecMode[2]],
-        )).to(torch.float32)
-        coordinate_line = torch.stack((torch.zeros_like(coordinate_line), coordinate_line), dim=-1).detach().view(3, -1, 1, 2)
-        plane_feats = F.grid_sample(self.encoder.plane_coef[:, :self.encoder.app_n_comp], coordinate_plane, align_corners=True).view(3 * self.encoder.app_n_comp, -1)
-        line_feats = F.grid_sample(self.encoder.line_coef[:, :self.encoder.app_n_comp], coordinate_line, align_corners=True).view(3 * self.encoder.app_n_comp, -1)
-
-        return (plane_feats * line_feats).T
-
-    def forward(self, x, **kwargs):
-        return self.compute_appfeature(x)
-    
-
-class VertexEncoder(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        self.emb_size = 16
-        self.n_output_dims = self.emb_size + 3
-
-        self.n_vertices = mesh.get_num_vertices()
-        self.embeddings = nn.Embedding(self.n_vertices, self.emb_size)
-        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.1)
-
-        self.faces = mesh.get_faces()
-        self.faces = nn.Parameter(torch.from_numpy(self.faces).long(), requires_grad=False)
-
-    def forward(self, x, face_idxs, barycentrics):
-        v0_idxs = self.faces[face_idxs, 0]
-        v1_idxs = self.faces[face_idxs, 1]
-        v2_idxs = self.faces[face_idxs, 2]
-
-        v0_emb = self.embeddings(v0_idxs)
-        v1_emb = self.embeddings(v1_idxs)
-        v2_emb = self.embeddings(v2_idxs)
-
-        emb = (barycentrics[:, 0, None] * v0_emb +
-               barycentrics[:, 1, None] * v1_emb +
-               barycentrics[:, 2, None] * v2_emb)
-        
-        emb = torch.concatenate([
-            emb,
-            x,
-        ], dim=-1)
-        
-        return emb
-
-
 class RayModel(nn.Module):
-    def __init__(self, mesh):
+    def __init__(self, model_config, mesh):
         super().__init__()
 
         mesh_min, mesh_max = mesh.get_bounds()
         self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
         self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
 
-        self.encoding_config = {
-            "otype": "HashGrid",
-            "n_levels": 18,
-            "n_features_per_level": 4,
-            "log2_hashmap_size": 10,
-            "base_resolution": 2,
-            "per_level_scale": 2,
-            "fixed_point_pos": False,
-        }
-        self.network_config = {
-            "otype": "FullyFusedMLP",
-            "activation": "LeakyReLU",
-            "output_activation": "None",
-            "n_neurons": 64,
-            "n_hidden_layers": 4,
-        }
+        self.network_config = model_config.network_config
+        self.point_encoding_config = model_config.point_encoding_config
+        self.direction_encoding_config = model_config.direction_encoding_config
 
-        self.points_amount = 2
+        # input dimentions for every encoder
         self.n_input_dims = 3
-        #self.encoding = VertexEncoder(mesh)
-        #self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        #self.encoding = TensoRFEncoder(mesh)
-        self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.encoding.n_output_dims * self.points_amount #+ self.encoding.n_output_dims
+
+        # output dimentions of mlp head: presence of intersection (1), distance (1) and normal (3)
         self.n_output_dims = 5
 
-        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
+        self.point_encoding = tcnn.Encoding(self.n_input_dims, self.point_encoding_config)
+        self.direction_encoding = tcnn.Encoding(self.n_input_dims, self.direction_encoding_config)
+
+        self.mlp_input_dims = self.point_encoding.n_output_dims + self.direction_encoding.n_output_dims
+        self.network = tcnn.Network(self.mlp_input_dims, self.n_output_dims, self.network_config)
 
 
-    def forward(self, x, **kwargs):
-        x[:, :3] = (x[:, :3] - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        #x = x.reshape(x.shape[0], self.points_amount, 3)
-        #x = (x - self.mesh_min[None, None, :]) / (self.mesh_max[None, None, :] - self.mesh_min[None, None, :])
-        x = x.reshape(x.shape[0] * self.points_amount, 3)
-        
-        x_enc = self.encoding(x[:, :6]).float()
-        #x_enc = self.encoding(x[:, :3], kwargs["face_idxs"], kwargs["barycentrics"]).float()
-        #x_dirs_enc = self.dir_encoding(x[:, 3:6]).float()
-        x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
-        #print(x_enc.shape)
-        #print(self.network)
-        #x = self.rays_to_unit_plucker4(x[:, :3], x[:, 3:])
-        #x_enc = self.encoding(x).float()
-        
-        #x_enc = torch.cat([x_enc, x_dirs_enc], dim=1)
+    def forward(self, points, directions, **kwargs):
+        points = (points - self.mesh_min) / (self.mesh_max - self.mesh_min)
+        points_enc = self.point_encoding(points).float()
+
+        directions = (directions + 1) / 2
+        directions_enc = self.direction_encoding(directions).float()
        
-        delta = self.network(x_enc)
-        #y = x + delta
-        #y = y * (self.mesh_max - self.mesh_min) + self.mesh_min
-        return delta
-    
+        x = torch.cat([points_enc, directions_enc], dim=1)
+        y = self.network(x)
 
-class RayVertexModel(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
+        has_intersection = y[:, 0]
+        distance = y[:, 1]
+        normal = y[:, 2:]
 
-        mesh_min, mesh_max = mesh.get_bounds()
-        self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
-        self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
-
-        self.encoding_config = {
-            "otype": "HashGrid",
-            "n_levels": 18,
-            "n_features_per_level": 4,
-            "log2_hashmap_size": 10,
-            "base_resolution": 2,
-            "per_level_scale": 2,
-            "fixed_point_pos": False,
-        }
-        self.network_config = {
-            "otype": "FullyFusedMLP",
-            "activation": "LeakyReLU",
-            "output_activation": "None",
-            "n_neurons": 64,
-            "n_hidden_layers": 4,
-        }
-
-        self.points_amount = 1
-        self.n_input_dims = 3
-        self.encoding = VertexEncoder(mesh)
-        #self.encoding = TensoRFEncoder(mesh)
-        self.dir_encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.dir_encoding.n_output_dims * self.points_amount + self.encoding.n_output_dims
-        self.n_output_dims = 3
-
-        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
-
-
-    def forward(self, x, **kwargs):
-        x[:, :3] = (x[:, :3] - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        #x = x.reshape(x.shape[0] * self.points_amount, 3)
-        #x_enc = self.encoding(x[:, :6]).float()
-        #x_enc = self.encoding(x[:, :6], kwargs["face_idxs"], kwargs["barycentrics"]).float()
-        #x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
-        x_enc = self.encoding(x[:, :3], kwargs["face_idxs"], kwargs["barycentrics"]).float()
-        x_dirs_enc = self.dir_encoding(x[:, 3:6]).float()
-
-        x_enc = torch.cat([x_enc, x_dirs_enc], dim=1)
+        normalized_normal = torch.zeros(normal.shape, dtype=normal.dtype, device=normal.device)
+        normalized_normal[normal.norm(dim=1) > 0] = normal / normal.norm(dim=1)[:, None]
         
-        delta = self.network(x_enc)
-        return delta
-    
-
-class RayNormalModel(nn.Module):
-    def __init__(self, mesh):
-        super().__init__()
-
-        mesh_min, mesh_max = mesh.get_bounds()
-        self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
-        self.mesh_max = nn.Parameter(torch.tensor(mesh_max, dtype=torch.float32), requires_grad=False)
-
-        self.encoding_config = {
-            "otype": "HashGrid",
-            "n_levels": 18,
-            "n_features_per_level": 4,
-            "log2_hashmap_size": 10,
-            "base_resolution": 2,
-            "per_level_scale": 2,
-            "fixed_point_pos": False,
-        }
-        self.network_config = {
-            "otype": "FullyFusedMLP",
-            "activation": "LeakyReLU",
-            "output_activation": "None",
-            "n_neurons": 64,
-            "n_hidden_layers": 4,
-        }
-
-        self.points_amount = 2
-        self.n_input_dims = 3
-        #self.encoding = VertexEncoder(mesh)
-        #self.encoding = TensoRFEncoder(mesh)
-        self.encoding = tcnn.Encoding(self.n_input_dims, self.encoding_config)
-        self.n_encoder_dims = self.encoding.n_output_dims * self.points_amount #+ self.encoding.n_output_dims
-        self.n_output_dims = 3
-
-        self.network = tcnn.Network(self.n_encoder_dims, self.n_output_dims, self.network_config)
-
-
-    def forward(self, x, **kwargs):
-        x[:, :3] = (x[:, :3] - self.mesh_min) / (self.mesh_max - self.mesh_min)
-        x = x.reshape(x.shape[0] * self.points_amount, 3)
-        x_enc = self.encoding(x[:, :6]).float()
-        #x_enc = self.encoding(x[:, :6], kwargs["face_idxs"], kwargs["barycentrics"]).float()
-        x_enc = x_enc.reshape(x_enc.shape[0] // self.points_amount, -1)
-        #x_enc = self.encoding(x[:, :3], kwargs["face_idxs"], kwargs["barycentrics"]).float()
-        #x_enc = self.dir_encoding(x[:, :6]).float()
-
-        #x_enc = torch.cat([x_enc, x_dirs_enc], dim=1)
-        
-        delta = self.network(x_enc)
-        return delta
+        return has_intersection, distance, normalized_normal
