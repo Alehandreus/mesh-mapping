@@ -5,6 +5,7 @@ import torch.autograd as autograd
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim.swa_utils import AveragedModel, SWALR
 import math
+import copy
 from tqdm import tqdm
 from utils import MeshWrapper, sample_directions, sample_sphere, get_camera_rays
 from visualization import save_mesh_previews, render_predictions
@@ -29,10 +30,14 @@ def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, schedul
 
     if cfg.train.use_averaged_model in ['EMA', 'SWA']:
         checkpoint_data["averaged_model"] = averaged_model.state_dict()
-        averaged_model.module.network.params.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
+        copy_model = copy.deepcopy(averaged_model.module)
+        #averaged_model.module.parameters.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
     else:
-        model.network.params.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
-
+        copy_model = copy.deepcopy(model)
+        #model.parameters.data.cpu().numpy().astype(np.float16).tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
+    copy_model.half()
+    torch.save(copy_model.state_dict(), f"{cfg.train.checkpoints_path}/{run_name}_half.pt")
+    
     checkpoint_name = f"{cfg.train.checkpoints_path}/{run_name}.pt"
     torch.save(checkpoint_data, checkpoint_name)
 
@@ -48,7 +53,7 @@ def eval_model(cfg, fine_mesh, outer_mesh, model):
     model.eval()
     predicted_intersection, predicted_r, predicted_normal = model(x_src[mask], ds[mask])
 
-    intersected_mask = predicted_intersection > 0
+    intersected_mask = predicted_intersection >= 0
     whole_intesected_mask = mask.clone()
     whole_intesected_mask[mask] = intersected_mask
 
@@ -57,11 +62,12 @@ def eval_model(cfg, fine_mesh, outer_mesh, model):
     points = x_src[true_mask] + ds[true_mask] * true_r[true_mask][:, None] 
     predicted_points = x_src[whole_intesected_mask] + ds[whole_intesected_mask] * predicted_r[intersected_mask][:, None]
 
-    render_predictions(
+    mse, psnr = render_predictions(
         cfg, points, predicted_points, cam_poses, 
         normals_traced, predicted_normal, 
         intersected_mask, whole_intesected_mask, true_mask
     )
+    return mse, psnr
 
 
 
@@ -91,7 +97,7 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
         intersection_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
         intersected_mask = predicted_intersection > 0
         entropy = intersection_loss(predicted_intersection, true_intersection)
-        weights = torch.ones_like(mask, dtype=torch.float32) + (intersected_mask & mask) * math.exp(epoch / 10000)
+        weights = torch.ones_like(mask, dtype=torch.float32) + (intersected_mask & mask) * math.exp(epoch / 50000)
         entropy = (entropy * weights).mean()
 
         #distance = ((predicted_r[mask] - true_r[mask]) ** 2).mean()
@@ -99,37 +105,41 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
 
         normal_error = -torch.nn.functional.cosine_similarity(predicted_normal[mask], normals_traced[mask], dim=1, eps=1e-6).mean() + 1.0
 
-        loss = 0.01 * distance + entropy + normal_error
+        loss = 0.01 * distance + normal_error + entropy
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         if cfg.train.use_averaged_model in ['EMA', 'SWA']:
             averaged_model.update_parameters(model)
+        else:
+            averaged_model = model
         if cfg.train.use_averaged_model == 'SWA':
             swa_scheduler.step()
         scheduler.step()
 
+        mse = 0
+        psnr = 0
+        info = ""
+        if epoch % cfg.visualization.render_interval == cfg.visualization.render_interval - 1:
+            mse, psnr = eval_model(cfg, fine_mesh, outer_mesh, averaged_model)
+            info += f"MSE={mse:.6f}, PSNR={psnr:.4f}"
+        if epoch % cfg.train.checkpoints_interval == cfg.train.checkpoints_interval - 1:
+            info += f" dist={distance.item():.4f}, entr={entropy.item():.4f}, norm={normal_error.item():.4f}, total={loss.item():.4f}, insc_true={mask.sum().item()}, insc_pred={intersected_mask.sum().item()}"
+            save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step)
+        if info != "":
+            progress.set_postfix_str(info)
         if cfg.train.tensorboard:
             writer.add_scalar("Total_loss", loss.item(), epoch * cfg.train.sample_size)
             writer.add_scalar("Normal_loss", normal_error.item(), epoch * cfg.train.sample_size)
             writer.add_scalar("Distance_loss", distance.item(), epoch * cfg.train.sample_size)
             writer.add_scalar("Entropy_loss", entropy.item(), epoch * cfg.train.sample_size)
             writer.add_scalar("Learning_rate", scheduler.get_last_lr()[0], epoch * cfg.train.sample_size)
+            if mse > 0:
+                writer.add_scalar("MSE", mse, epoch * cfg.train.sample_size)
+            if psnr > 0:
+                writer.add_scalar("PSNR", psnr, epoch * cfg.train.sample_size)
             writer.flush()
-
-        if epoch % cfg.visualization.render_interval == cfg.visualization.render_interval - 1:
-            eval_model(cfg, fine_mesh, outer_mesh, model)
-        if epoch % cfg.train.checkpoints_interval == cfg.train.checkpoints_interval - 1:
-            progress.set_postfix(
-                total=f"{loss.item():.4f}", 
-                norm=f"{normal_error.item():.4f}", 
-                dist=f"{distance.item():.4f}",
-                entr=f"{entropy.item():.4f}",
-                insc_true=f"{mask.sum().item()}",
-                insc_pred=f"{intersected_mask.sum().item()}"
-            )
-            save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step)
 
     return model
 
@@ -143,8 +153,8 @@ def main(cfg):
         model_config = cfg.model
 
     print()
-    fine_mesh = MeshWrapper.from_file(cfg.fine_mesh_path, n_max_samples=cfg.mesh_n_max_samples)
-    outer_mesh = MeshWrapper.from_file(cfg.outer_mesh_path, n_max_samples=cfg.mesh_n_max_samples)
+    fine_mesh = MeshWrapper.from_file(cfg.fine_mesh_path, n_max_samples=cfg.mesh_n_max_samples, scale=0.01)
+    outer_mesh = MeshWrapper.from_file(cfg.outer_mesh_path, n_max_samples=cfg.mesh_n_max_samples, scale=0.01)
 
     os.makedirs(cfg.visualization.preview_path, exist_ok=True)
     os.makedirs(cfg.visualization.render_path, exist_ok=True)

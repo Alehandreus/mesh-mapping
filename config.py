@@ -5,8 +5,8 @@ cfg = SimpleNamespace()
 
 cfg.device = "cuda"
 
-cfg.fine_mesh_path = "models/chess_orig.fbx"
-cfg.outer_mesh_path = "models/chess_outer_10000.fbx"
+cfg.fine_mesh_path = "models/superdragon_orig.fbx"
+cfg.outer_mesh_path = "models/superdragon_outer_5000.fbx"
 cfg.mesh_n_max_samples = 1_000_000
 
 
@@ -25,11 +25,20 @@ cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
     "n_features_per_level": 8,
-    "log2_hashmap_size": 16,
+    "log2_hashmap_size": 13,
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
 }
+#cfg.model.uv_encoding_config = {
+#    "otype": "HashGrid",
+#    "n_levels": 8,
+#    "n_features_per_level": 8,
+#    "log2_hashmap_size": 13,
+#    "base_resolution": 16,
+#    "per_level_scale": 2,
+#    "fixed_point_pos": False,
+#}
 cfg.model.direction_encoding_config = {
     "otype": "SphericalHarmonics", 
     "degree": 4  
@@ -42,10 +51,10 @@ cfg.train = SimpleNamespace()
 
 # each epoch contains <cfg.train.sample_size> rays
 cfg.train.sample_size = 100_000
-cfg.train.epochs = 10_000 
+cfg.train.epochs = 5_000 
 
 cfg.train.learning_rate = 1e-2
-cfg.train.learning_rate_scheduler_min = 1.0
+cfg.train.learning_rate_scheduler_min = 0.1
 
 # can be 'EMA' or 'SWA', other strings mean that no averaged model used
 cfg.train.use_averaged_model = 'EMA'
@@ -61,7 +70,7 @@ cfg.train.checkpoints_path = "checkpoints"
 cfg.train.checkpoints_interval = 100
 
 # tensorboard logging
-cfg.train.tensorboard = False
+cfg.train.tensorboard = True
 cfg.train.tensorboard_path = "runs"
 cfg.train.tensorboard_run_name = None
 
