@@ -27,22 +27,21 @@ class RayModel(nn.Module):
         #self.uv_encoding = tcnn.Encoding(self.n_input_dims - 1, self.uv_encoding_config)
         self.direction_encoding = tcnn.Encoding(self.n_input_dims, self.direction_encoding_config)
 
-        self.mlp_input_dims = self.point_encoding.n_output_dims + self.direction_encoding.n_output_dims# + self.uv_encoding.n_output_dims
+        self.mlp_input_dims = self.point_encoding.n_output_dims * 2 + self.direction_encoding.n_output_dims
         self.network = tcnn.Network(self.mlp_input_dims, self.n_output_dims, self.network_config)
 
 
-    def forward(self, points, directions, **kwargs):
+    def forward(self, points, points_inner, directions, **kwargs):
         points = (points - self.mesh_min) / (self.mesh_max - self.mesh_min)
         points_enc = self.point_encoding(points).float()
 
-        #u = torch.arccos(points[:, 2] / points.norm(dim=1))
-        #v = torch.arctan(points[:, 1] / points[:, 0])
-        #uv_enc = self.uv_encoding(torch.stack([u, v], dim=1)).float()
+        points_inner = (points_inner - self.mesh_min) / (self.mesh_max - self.mesh_min)
+        points_inner_enc = self.point_encoding(points_inner).float()
 
         directions = (directions + 1) / 2
         directions_enc = self.direction_encoding(directions).float()
        
-        x = torch.cat([points_enc, directions_enc], dim=1)
+        x = torch.cat([points_enc, points_inner_enc, directions_enc], dim=1)
         y = self.network(x).float()
 
         has_intersection = y[:, 0]

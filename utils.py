@@ -164,28 +164,31 @@ def sample_directions(normals, device):
     return torch.tensor(prop_ds, device=device)
 
 def sample_directions_torch(normals, device):
-    n = normals.shape[0]
-    thetas = torch.rand(n, device=device) * torch.pi
-    phis = torch.rand(n, device=device) * torch.pi
-
-    sin_thetas = torch.sin(thetas)
-    vector = torch.stack([
-        sin_thetas * torch.cos(phis),
-        sin_thetas * torch.sin(phis),
-        torch.cos(thetas),
-    ], dim=1)
-
-    basis_x_norm = torch.ones_like(normals)
-    mask = normals[:, 2] != 0
-    basis_x_norm[mask, 2] = -(normals[mask, 0] + normals[mask, 1]) / normals[mask, 2]
-    basis_x_norm[~mask, 2] = 0
-    basis_x_norm = basis_x_norm / basis_x_norm.norm(dim=1, keepdim=True)
-    basis_y_norm = -normals / normals.norm(dim=1, keepdim=True)
-    basis_z_norm = torch.linalg.cross(basis_x_norm, basis_y_norm)
-    basis_coefs = torch.stack([basis_x_norm, basis_y_norm, basis_z_norm], dim=2)
-
-    prop_ds = torch.einsum('ijk,ik->ij', basis_coefs, vector)
+    prop_ds = torch.randn(normals.shape, device=device)
+    prop_ds = prop_ds / prop_ds.norm(dim=1, keepdim=True)
     return prop_ds
+    # n = normals.shape[0]
+    # thetas = torch.rand(n, device=device) * torch.pi
+    # phis = torch.rand(n, device=device) * torch.pi
+
+    # sin_thetas = torch.sin(thetas)
+    # vector = torch.stack([
+    #     sin_thetas * torch.cos(phis),
+    #     sin_thetas * torch.sin(phis),
+    #     torch.cos(thetas),
+    # ], dim=1)
+
+    # basis_x_norm = torch.ones_like(normals)
+    # mask = normals[:, 2] != 0
+    # basis_x_norm[mask, 2] = -(normals[mask, 0] + normals[mask, 1]) / normals[mask, 2]
+    # basis_x_norm[~mask, 2] = 0
+    # basis_x_norm = basis_x_norm / basis_x_norm.norm(dim=1, keepdim=True)
+    # basis_y_norm = -normals / normals.norm(dim=1, keepdim=True)
+    # basis_z_norm = torch.linalg.cross(basis_x_norm, basis_y_norm)
+    # basis_coefs = torch.stack([basis_x_norm, basis_y_norm, basis_z_norm], dim=2)
+
+    # prop_ds = torch.einsum('ijk,ik->ij', basis_coefs, vector)
+    # return prop_ds
 
 def sample_sphere(radius, center, sample_size):
     thetas = np.random.uniform(0, np.pi, size=sample_size)

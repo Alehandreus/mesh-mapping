@@ -44,14 +44,19 @@ def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, schedul
     
 
 @torch.no_grad()
-def eval_model(cfg, fine_mesh, outer_mesh, model):
+def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
     cam_poses, ds = get_camera_rays(fine_mesh.mesh, img_size=cfg.visualization.image_size, device=cfg.device)
     ds = ds / ds.norm(dim=1, keepdim=True)
     mask, t, normals = outer_mesh.ray_tracer.trace(cam_poses, ds)
     x_src = cam_poses + ds * t[:, None]
 
+    inner_mask, inner_t, _ = inner_mesh.ray_tracer.trace(x_src, ds)
+    x_src_2 = torch.zeros_like(x_src)
+    x_src_2[inner_mask] = x_src[inner_mask] + ds[inner_mask] * inner_t[inner_mask][:, None]
+    x_src_2[~inner_mask] = 0
+
     model.eval()
-    predicted_intersection, predicted_r, predicted_normal = model(x_src[mask], ds[mask])
+    predicted_intersection, predicted_r, predicted_normal = model(x_src[mask], x_src_2[mask], ds[mask])
 
     intersected_mask = predicted_intersection >= 0
     whole_intesected_mask = mask.clone()
@@ -71,9 +76,9 @@ def eval_model(cfg, fine_mesh, outer_mesh, model):
 
 
 
-def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, scheduler, swa_scheduler, writer, model_config, run_name, step):
+def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, optimizer, scheduler, swa_scheduler, writer, model_config, run_name, step):
     mesh_min, mesh_max = outer_mesh.mesh.get_bounds()
-    center = (mesh_min + mesh_max) / 2  #mesh-utils return multiplied by 100 value and i don't know why
+    center = (mesh_min + mesh_max) / 2
     radius = np.max(mesh_max - mesh_min) / 2
     print('Sample sphere radius =', radius)
 
@@ -83,7 +88,7 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
         x, normals = sample_sphere_torch(radius + 0.1, center, cfg.train.sample_size, cfg.device)
         ds = sample_directions_torch(normals, cfg.device)
        
-        _, t, _ = outer_mesh.ray_tracer.trace(x, ds)
+        premask, t, _ = outer_mesh.ray_tracer.trace(x, ds)
         x_src = x + ds * t[:, None]
 
         mask, true_r, normals_traced = fine_mesh.ray_tracer.trace(x_src, ds)
@@ -92,7 +97,12 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
         mask[true_r < 0] = 0
         true_intersection = mask.to(torch.float16)
 
-        predicted_intersection, predicted_r, predicted_normal = model(x_src, ds)
+        inner_mask, inner_t, _ = inner_mesh.ray_tracer.trace(x_src, ds)
+        x_src_2 = torch.zeros_like(x_src)
+        x_src_2[inner_mask] = x_src[inner_mask] + ds[inner_mask] * inner_t[inner_mask][:, None]
+        x_src_2[~inner_mask] = 0
+
+        predicted_intersection, predicted_r, predicted_normal = model(x_src, x_src_2, ds)
 
         intersection_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
         intersected_mask = predicted_intersection > 0
@@ -125,7 +135,7 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
         accuracy = 0
         info = ""
         if epoch % cfg.visualization.render_interval == cfg.visualization.render_interval - 1:
-            mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, averaged_model)
+            mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, averaged_model)
             info += f"MSE={mse:.6f}, PSNR={psnr:.4f}"
         if epoch % cfg.train.checkpoints_interval == cfg.train.checkpoints_interval - 1:
             info += f" dist={distance.item():.4f}, entr={entropy.item():.4f}, norm={normal_error.item():.4f}, total={loss.item():.4f}, insc_true={mask.sum().item()}, insc_pred={intersected_mask.sum().item()}"
@@ -157,9 +167,9 @@ def main(cfg):
         checkpoint = None
         model_config = cfg.model
 
-    print()
     fine_mesh = MeshWrapper.from_file(cfg.fine_mesh_path, n_max_samples=cfg.mesh_n_max_samples, scale=0.01)
     outer_mesh = MeshWrapper.from_file(cfg.outer_mesh_path, n_max_samples=cfg.mesh_n_max_samples, scale=0.01)
+    inner_mesh = MeshWrapper.from_file(cfg.inner_mesh_path, n_max_samples=cfg.mesh_n_max_samples, scale=0.01)
 
     os.makedirs(cfg.visualization.preview_path, exist_ok=True)
     os.makedirs(cfg.visualization.render_path, exist_ok=True)
@@ -168,8 +178,8 @@ def main(cfg):
     save_mesh_previews({
         f"{cfg.visualization.preview_path}/{cfg.visualization.fine_mesh_preview_name}":  fine_mesh.mesh,
         f"{cfg.visualization.preview_path}/{cfg.visualization.outer_mesh_preview_name}": outer_mesh.mesh,
+        f"{cfg.visualization.preview_path}/{cfg.visualization.inner_mesh_preview_name}": inner_mesh.mesh,
     }, cfg.visualization.image_size)
-
 
     model = RayModel(model_config, outer_mesh.mesh).to(cfg.device)
 
@@ -208,7 +218,7 @@ def main(cfg):
         writer = SummaryWriter(f"{cfg.train.tensorboard_path}/{run_name}")
 
     model = train_model(
-        cfg, fine_mesh, outer_mesh, 
+        cfg, fine_mesh, outer_mesh, inner_mesh,
         model, averaged_model, optimizer, 
         learing_rate_scheduler, swa_scheduler, 
         writer, model_config, run_name, step
