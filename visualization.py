@@ -57,7 +57,17 @@ def render_predictions(cfg, points, predicted_points, cam_poses, normals_traced,
     path = f"{cfg.visualization.render_path}/{cfg.visualization.predicted_mesh_render_name}"
     render_image(predicted_pixels, whole_intesected_mask, cfg.visualization.image_size, path, cfg.device)
 
-    mse = np.square(true_map - predicted_map).mean()
+    predicted_pixels_full = torch.zeros((cfg.visualization.image_size * cfg.visualization.image_size), device=cfg.device)
+    predicted_pixels_full[whole_intesected_mask] = predicted_pixels
+
+    true_pixels_full = torch.zeros((cfg.visualization.image_size * cfg.visualization.image_size), device=cfg.device)
+    true_pixels_full[true_mask] = true_pixels
+
+    # mse = np.square(true_map - predicted_map).mean()
+    mse = np.square(true_pixels_full.cpu().numpy() - predicted_pixels_full.cpu().numpy()).mean()
     psnr = np.log10(1 / mse) * 10
 
-    return mse, psnr
+    accuracy = (predicted_pixels_full.cpu().numpy() > 0.5) == (true_pixels_full.cpu().numpy() > 0.5)
+    accuracy = accuracy.sum() / accuracy.size
+
+    return mse, psnr, accuracy

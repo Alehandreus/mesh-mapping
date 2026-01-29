@@ -43,13 +43,14 @@ class RayModel(nn.Module):
         directions_enc = self.direction_encoding(directions).float()
        
         x = torch.cat([points_enc, directions_enc], dim=1)
-        y = self.network(x)
+        y = self.network(x).float()
 
         has_intersection = y[:, 0]
         distance = y[:, 1]
         normal = y[:, 2:]
 
         normalized_normal = torch.zeros(normal.shape, dtype=normal.dtype, device=normal.device)
-        normalized_normal[normal.norm(dim=1) > 0] = normal / normal.norm(dim=1)[:, None]
+        if (normal.norm(dim=1) > 1e-8).any():
+            normalized_normal[normal.norm(dim=1) > 1e-8] = (normal / normal.norm(dim=1, keepdim=True))[normal.norm(dim=1) > 1e-8]
         
         return has_intersection, distance, normalized_normal

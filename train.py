@@ -7,7 +7,7 @@ from torch.optim.swa_utils import AveragedModel, SWALR
 import math
 import copy
 from tqdm import tqdm
-from utils import MeshWrapper, sample_directions, sample_sphere, get_camera_rays
+from utils import MeshWrapper, sample_directions_torch, sample_sphere_torch, get_camera_rays
 from visualization import save_mesh_previews, render_predictions
 
 from models import RayModel
@@ -62,12 +62,12 @@ def eval_model(cfg, fine_mesh, outer_mesh, model):
     points = x_src[true_mask] + ds[true_mask] * true_r[true_mask][:, None] 
     predicted_points = x_src[whole_intesected_mask] + ds[whole_intesected_mask] * predicted_r[intersected_mask][:, None]
 
-    mse, psnr = render_predictions(
+    mse, psnr, accuracy = render_predictions(
         cfg, points, predicted_points, cam_poses, 
         normals_traced, predicted_normal, 
         intersected_mask, whole_intesected_mask, true_mask
     )
-    return mse, psnr
+    return mse, psnr, accuracy
 
 
 
@@ -80,9 +80,8 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
     progress = tqdm(range(step, cfg.train.epochs))
     for epoch in progress:
         model.train()
-        x, normals = sample_sphere(radius + 0.1, center, cfg.train.sample_size)
-        x = torch.tensor(x, device=cfg.device)
-        ds = sample_directions(normals, cfg.device)
+        x, normals = sample_sphere_torch(radius + 0.1, center, cfg.train.sample_size, cfg.device)
+        ds = sample_directions_torch(normals, cfg.device)
        
         _, t, _ = outer_mesh.ray_tracer.trace(x, ds)
         x_src = x + ds * t[:, None]
@@ -94,18 +93,21 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
         true_intersection = mask.to(torch.float16)
 
         predicted_intersection, predicted_r, predicted_normal = model(x_src, ds)
+
         intersection_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
         intersected_mask = predicted_intersection > 0
         entropy = intersection_loss(predicted_intersection, true_intersection)
-        weights = torch.ones_like(mask, dtype=torch.float32) + (intersected_mask & mask) * math.exp(epoch / 50000)
-        entropy = (entropy * weights).mean()
+        # weights = torch.ones_like(mask, dtype=torch.float32) + (intersected_mask & mask) * math.exp(epoch / 50000)
+        # entropy = (entropy * weights).mean()
+        entropy = entropy.mean()
 
         #distance = ((predicted_r[mask] - true_r[mask]) ** 2).mean()
         distance = (predicted_r[mask] - true_r[mask]).abs().mean() 
 
         normal_error = -torch.nn.functional.cosine_similarity(predicted_normal[mask], normals_traced[mask], dim=1, eps=1e-6).mean() + 1.0
 
-        loss = 0.01 * distance + normal_error + entropy
+        # loss = 0.01 * distance + normal_error + entropy
+        loss = normal_error + entropy
 
         optimizer.zero_grad()
         loss.backward()
@@ -120,9 +122,10 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
 
         mse = 0
         psnr = 0
+        accuracy = 0
         info = ""
         if epoch % cfg.visualization.render_interval == cfg.visualization.render_interval - 1:
-            mse, psnr = eval_model(cfg, fine_mesh, outer_mesh, averaged_model)
+            mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, averaged_model)
             info += f"MSE={mse:.6f}, PSNR={psnr:.4f}"
         if epoch % cfg.train.checkpoints_interval == cfg.train.checkpoints_interval - 1:
             info += f" dist={distance.item():.4f}, entr={entropy.item():.4f}, norm={normal_error.item():.4f}, total={loss.item():.4f}, insc_true={mask.sum().item()}, insc_pred={intersected_mask.sum().item()}"
@@ -138,7 +141,9 @@ def train_model(cfg, fine_mesh, outer_mesh, model, averaged_model, optimizer, sc
             if mse > 0:
                 writer.add_scalar("MSE", mse, epoch * cfg.train.sample_size)
             if psnr > 0:
-                writer.add_scalar("PSNR", psnr, epoch * cfg.train.sample_size)
+                writer.add_scalar("PSNR", psnr, epoch * cfg.train.sample_size)            
+            if accuracy > 0:
+                writer.add_scalar("Accuracy", accuracy, epoch * cfg.train.sample_size)
             writer.flush()
 
     return model

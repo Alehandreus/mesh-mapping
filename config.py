@@ -5,8 +5,12 @@ cfg = SimpleNamespace()
 
 cfg.device = "cuda"
 
-cfg.fine_mesh_path = "models/superdragon_orig.fbx"
-cfg.outer_mesh_path = "models/superdragon_outer_5000.fbx"
+# cfg.fine_mesh_path = "models/petmonster_orig.fbx"
+# cfg.outer_mesh_path = "models/petmonster_outer_2000.fbx"
+cfg.fine_mesh_path = "models/superdragon_orig.obj"
+cfg.outer_mesh_path = "models/superdragon_outer_5000.obj"
+# cfg.fine_mesh_path = "models/petmonster_orig.stl"
+# cfg.outer_mesh_path = "models/petmonster_outer_2000.stl"
 cfg.mesh_n_max_samples = 1_000_000
 
 
@@ -24,8 +28,8 @@ cfg.model.network_config = {
 cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
-    "n_features_per_level": 8,
-    "log2_hashmap_size": 13,
+    "n_features_per_level": 4,
+    "log2_hashmap_size": 20,
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
@@ -51,13 +55,15 @@ cfg.train = SimpleNamespace()
 
 # each epoch contains <cfg.train.sample_size> rays
 cfg.train.sample_size = 100_000
-cfg.train.epochs = 5_000 
+cfg.train.epochs = 500_000
 
-cfg.train.learning_rate = 1e-2
-cfg.train.learning_rate_scheduler_min = 0.1
+cfg.train.learning_rate = 1e-3
+cfg.train.learning_rate_scheduler_min = 1.0
+# cfg.train.learning_rate_scheduler_min = 0.1
 
 # can be 'EMA' or 'SWA', other strings mean that no averaged model used
-cfg.train.use_averaged_model = 'EMA'
+# cfg.train.use_averaged_model = 'EMA'
+cfg.train.use_averaged_model = None
 cfg.train.ema_decay = 0.999
 cfg.train.swa_learing_rate = 1e-3
 
@@ -67,7 +73,7 @@ cfg.train.model_start_checkpoint = None
 # path where checkpoint will be saved during training
 cfg.train.model_save_checkpoint = None
 cfg.train.checkpoints_path = "checkpoints"
-cfg.train.checkpoints_interval = 100
+cfg.train.checkpoints_interval = 500
 
 # tensorboard logging
 cfg.train.tensorboard = True
@@ -82,7 +88,7 @@ cfg.visualization = SimpleNamespace()
 cfg.visualization.image_size = 800
 
 cfg.visualization.light_normal = [1.0, 1.0, 1.0]
-cfg.visualization.render_interval = 100
+cfg.visualization.render_interval = cfg.train.checkpoints_interval
 # directory where all rendered images will be saved
 cfg.visualization.render_path = "rendered"
 cfg.visualization.true_distance_render_name = "true_distance_map.png"
