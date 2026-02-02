@@ -5,13 +5,26 @@ cfg = SimpleNamespace()
 
 cfg.device = "cuda"
 
-# cfg.fine_mesh_path = "models/petmonster_orig.fbx"
-# cfg.outer_mesh_path = "models/petmonster_outer_2000.fbx"
-cfg.fine_mesh_path = "models/superdragon_orig.obj"
-cfg.outer_mesh_path = "models/superdragon_outer_5000.obj"
-cfg.inner_mesh_path = "models/superdragon_inner_5000.obj"
-# cfg.fine_mesh_path = "models/petmonster_orig.stl"
-# cfg.outer_mesh_path = "models/petmonster_outer_2000.stl"
+# cfg.fine_mesh_path = "models/superdragon_orig.obj"
+# cfg.outer_mesh_path = "models/superdragon_outer_5000_uv.obj"
+# cfg.inner_mesh_path = "models/superdragon_inner_5000.obj"
+
+# cfg.fine_mesh_path = "/home/me/Downloads/petmonster_orig_uv.obj"
+# cfg.outer_mesh_path = "/home/me/Downloads/petmonster_outer_2000_uv.obj"
+# cfg.inner_mesh_path = "/home/me/Downloads/petmonster_inner_2000_uv.obj"
+
+# cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.obj"
+# cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
+# cfg.inner_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
+
+cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.fbx"
+cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000.fbx"
+cfg.inner_mesh_path = "/home/me/Downloads/chess_inner_10000.fbx"
+
+# cfg.fine_mesh_path = "/home/me/Downloads/sphere_orig.obj"
+# cfg.outer_mesh_path = "/home/me/Downloads/sphere_outer.obj"
+# cfg.inner_mesh_path = "/home/me/Downloads/sphere_inner.obj"
+
 cfg.mesh_n_max_samples = 1_000_000
 
 
@@ -26,24 +39,34 @@ cfg.model.network_config = {
     "n_neurons": 128,
     "n_hidden_layers": 4,
 }
+
+# cfg.model.encoding_type = "2d"
+cfg.model.encoding_type = "3d"
+# cfg.model.encoding_type = "3d+1"
+
+# for 3d point encoding
 cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
     "n_features_per_level": 4,
-    "log2_hashmap_size": 20,
+    "log2_hashmap_size": 14,
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
 }
-#cfg.model.uv_encoding_config = {
-#    "otype": "HashGrid",
-#    "n_levels": 8,
-#    "n_features_per_level": 8,
-#    "log2_hashmap_size": 13,
-#    "base_resolution": 16,
-#    "per_level_scale": 2,
-#    "fixed_point_pos": False,
-#}
+
+# for 2d uv encoding
+cfg.model.uv_encoding_config = {
+    "otype": "HashGrid",
+    "n_levels": 8,
+    "n_features_per_level": 4,
+    "log2_hashmap_size": 14,
+    "base_resolution": 16,
+    "per_level_scale": 2,
+    "fixed_point_pos": False,
+}
+
+# for direction encoding
 cfg.model.direction_encoding_config = {
     "otype": "SphericalHarmonics", 
     "degree": 4  
@@ -70,6 +93,7 @@ cfg.train.swa_learing_rate = 1e-3
 
 # if not None, load model and optimizer state from given checkpoint
 cfg.train.model_start_checkpoint = None
+# cfg.train.model_start_checkpoint = "/home/me/brain/mesh-mapping/checkpoints/sphere_debug.pt"
 
 # path where checkpoint will be saved during training
 cfg.train.model_save_checkpoint = None
@@ -86,7 +110,7 @@ cfg.train.tensorboard_run_name = None
 
 cfg.visualization = SimpleNamespace()
 
-cfg.visualization.image_size = 800
+cfg.visualization.image_size = 2048
 
 cfg.visualization.light_normal = [1.0, 1.0, 1.0]
 cfg.visualization.render_interval = cfg.train.checkpoints_interval

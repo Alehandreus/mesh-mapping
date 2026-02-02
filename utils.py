@@ -21,7 +21,11 @@ class MeshWrapper:
         if scale is not None:
             vertices = mesh.get_vertices()
             vertices = vertices * scale
-            mesh = Mesh.from_data(vertices, mesh.get_faces())
+
+            if mesh.has_uvs():
+                mesh = Mesh.from_data_with_uvs(vertices, mesh.get_faces(), mesh.get_uvs())
+            else:
+                mesh = Mesh.from_data(vertices, mesh.get_faces())
 
         builder = CPUBuilder(mesh)
         bvh = builder.build_bvh(bvh_depth)
