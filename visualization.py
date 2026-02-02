@@ -26,19 +26,19 @@ def prepare_distance(distance):
     return 1 - distance
 
 @torch.no_grad()
-def render_predictions(cfg, points, predicted_points, cam_poses, normals_traced, predicted_normals, intersected_mask, whole_intesected_mask, true_mask):
+def render_predictions(cfg, points, predicted_points, cam_poses, normals_traced, predicted_normals, whole_intersected_mask, true_mask):
     true_distance = (points - cam_poses[true_mask]).norm(dim=1)
     true_distance = prepare_distance(true_distance)
     path = f"{cfg.visualization.render_path}/{cfg.visualization.true_distance_render_name}"
     true_map = render_image(true_distance, true_mask, cfg.visualization.image_size, path, cfg.device)
 
     if predicted_points.numel() > 0:
-        predicted_distance = (predicted_points - cam_poses[whole_intesected_mask]).norm(dim=1)
+        predicted_distance = (predicted_points - cam_poses[whole_intersected_mask]).norm(dim=1)
         predicted_distance = prepare_distance(predicted_distance)
     else:
         predicted_distance = torch.tensor([], device=cfg.device)
     path = f"{cfg.visualization.render_path}/{cfg.visualization.predicted_distance_render_name}"
-    predicted_map = render_image(predicted_distance, whole_intesected_mask, cfg.visualization.image_size, path, cfg.device)
+    predicted_map = render_image(predicted_distance, whole_intersected_mask, cfg.visualization.image_size, path, cfg.device)
 
     difference = np.abs(true_map - predicted_map)
     path = f"{cfg.visualization.render_path}/{cfg.visualization.distance_difference_render_name}"
@@ -53,12 +53,12 @@ def render_predictions(cfg, points, predicted_points, cam_poses, normals_traced,
     path = f"{cfg.visualization.render_path}/{cfg.visualization.true_mesh_render_name}"
     render_image(true_pixels, true_mask, cfg.visualization.image_size, path, cfg.device)
 
-    predicted_pixels = torch.maximum(zero[whole_intesected_mask], torch.einsum("ij,j->i", predicted_normals[intersected_mask].to(torch.float32), lightnormal))
+    predicted_pixels = torch.maximum(zero[whole_intersected_mask], torch.einsum("ij,j->i", predicted_normals[whole_intersected_mask].to(torch.float32), lightnormal))
     path = f"{cfg.visualization.render_path}/{cfg.visualization.predicted_mesh_render_name}"
-    render_image(predicted_pixels, whole_intesected_mask, cfg.visualization.image_size, path, cfg.device)
+    render_image(predicted_pixels, whole_intersected_mask, cfg.visualization.image_size, path, cfg.device)
 
     predicted_pixels_full = torch.zeros((cfg.visualization.image_size * cfg.visualization.image_size), device=cfg.device)
-    predicted_pixels_full[whole_intesected_mask] = predicted_pixels
+    predicted_pixels_full[whole_intersected_mask] = predicted_pixels
 
     true_pixels_full = torch.zeros((cfg.visualization.image_size * cfg.visualization.image_size), device=cfg.device)
     true_pixels_full[true_mask] = true_pixels

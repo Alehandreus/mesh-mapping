@@ -52,31 +52,63 @@ def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, schedul
 def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
     cam_poses, ds = get_camera_rays(fine_mesh.mesh, img_size=cfg.visualization.image_size, device=cfg.device, distance_scale=1.0)
     ds = ds / ds.norm(dim=1, keepdim=True)
-    mask, t, normals, uvs_outer = outer_mesh.ray_tracer.trace(cam_poses, ds)
-    x_src = cam_poses + ds * t[:, None]
+    
 
-    inner_mask, inner_t, _, uvs_inner = inner_mesh.ray_tracer.trace(x_src, ds)
-    x_src_2 = torch.zeros_like(x_src)
-    x_src_2[inner_mask] = x_src[inner_mask] + ds[inner_mask] * inner_t[inner_mask][:, None]
-    x_src_2[~inner_mask] = 0
+    true_mask, true_r, normals_traced, uvs = fine_mesh.ray_tracer.trace(cam_poses, ds)
 
     model.eval()
-    predicted_intersection, predicted_r, predicted_normal = model(x_src[mask], x_src_2[mask], ds[mask], uvs_outer[mask])
+    render_iterations = 0
+    mask_iter = torch.ones(cam_poses.shape[0], dtype=torch.bool, device=cfg.device)
+    whole_intersected_mask = mask_iter.clone()
+    whole_predicted_r = torch.zeros(cam_poses.shape[0], device=cfg.device)
+    whole_predicted_normal = torch.zeros(cam_poses.shape, device=cfg.device)
+    x_src = cam_poses.clone()
+    while torch.sum(mask_iter) > 0 and render_iterations < 100:
+            mask, t, normals, uvs_outer = outer_mesh.ray_tracer.trace(x_src[mask_iter], ds[mask_iter])
+            x_src[mask_iter] = x_src[mask_iter] + ds[mask_iter] * t[:, None]
 
-    intersected_mask = predicted_intersection >= 0
-    # intersected_mask = predicted_intersection >= -100
-    whole_intesected_mask = mask.clone()
-    whole_intesected_mask[mask] = intersected_mask
+            if render_iterations == 0:
+                whole_intersected_mask[mask_iter] = mask
+            whole_mask_iter = mask_iter.clone()
+            whole_mask_iter[mask_iter] = mask
+            mask_iter = whole_mask_iter
 
-    true_mask, true_r, normals_traced, uvs = fine_mesh.ray_tracer.trace(x_src, ds)
+            inner_mask, inner_t, _, uvs_inner = inner_mesh.ray_tracer.trace(x_src[mask_iter], ds[mask_iter])
+            x_src_inner = torch.zeros_like(x_src[mask_iter])
+            x_src_inner[inner_mask] = x_src[mask_iter][inner_mask] + ds[mask_iter][inner_mask] * inner_t[inner_mask][:, None]
+            x_src_inner[~inner_mask] = 0
+            inner_t[~inner_mask] = 0
 
-    points = x_src[true_mask] + ds[true_mask] * true_r[true_mask][:, None] 
-    predicted_points = x_src[whole_intesected_mask] + ds[whole_intesected_mask] * predicted_r[intersected_mask][:, None]
+            x_src_shifted = x_src[mask_iter] + ds[mask_iter] * 1e-3
+            outer_mask, outer_t, _, uvs = outer_mesh.ray_tracer.trace(x_src_shifted, ds[mask_iter])
+            x_src_outer = torch.zeros_like(x_src[mask_iter])
+            x_src_outer[outer_mask] = x_src_shifted[outer_mask] + ds[mask_iter][outer_mask] * outer_t[outer_mask][:, None]
+            x_src_outer[~outer_mask] = 0
+            outer_t[~outer_mask] = 0
+            x_src_inner[~inner_mask & outer_mask] = x_src_shifted[~inner_mask & outer_mask]
 
+            predicted_intersection, predicted_r, predicted_normal = model(x_src[mask_iter], x_src_inner, ds[mask_iter], uvs_outer[mask])
+            intersected_mask = predicted_intersection >= 0
+            # intersected_mask = predicted_intersection >= -100
+            whole_intersected_mask[mask_iter] = intersected_mask
+            whole_predicted_r[mask_iter] = predicted_r
+            whole_predicted_normal[mask_iter] = predicted_normal
+
+            whole_mask_iter = mask_iter.clone()
+            mask_iter_tmp = ~intersected_mask & inner_mask & outer_mask & (inner_t > outer_t)
+            #print(mask_iter_tmp.sum().item())
+            whole_mask_iter[mask_iter] = mask_iter_tmp
+            x_src[whole_mask_iter] = x_src_outer[mask_iter_tmp] + ds[mask_iter][mask_iter_tmp] * 1e-3
+            mask_iter = whole_mask_iter
+            
+            render_iterations += 1
+
+    points = cam_poses[true_mask] + ds[true_mask] * true_r[true_mask][:, None] 
+    predicted_points = x_src[whole_intersected_mask] + ds[whole_intersected_mask] * whole_predicted_r[whole_intersected_mask][:, None]
     mse, psnr, accuracy = render_predictions(
         cfg, points, predicted_points, cam_poses, 
-        normals_traced, predicted_normal, 
-        intersected_mask, whole_intesected_mask, true_mask
+        normals_traced, whole_predicted_normal, 
+        whole_intersected_mask, true_mask
     )
     return mse, psnr, accuracy
 
@@ -94,27 +126,63 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         x, normals = sample_sphere_torch(radius + 0.1, center, cfg.train.sample_size, cfg.device)
         ds = sample_directions_torch(normals, cfg.device)
 
-        premask, t, _, uvs_outer = outer_mesh.ray_tracer.trace(x, ds)
-        x_src = x + ds * t[:, None]
+        #premask, t, _, uvs_outer = outer_mesh.ray_tracer.trace(x, ds, allow_negative=True)
+        #x_src = x + ds * t[:, None]
 
-        mask, true_r, normals_traced, uvs = fine_mesh.ray_tracer.trace(x_src, ds)
-        mask[true_r < 0] = 0
+        mask = torch.ones(x.shape[0])
+        x_src_iter = x.clone()
+        ds_iter = ds.clone()
+        additional_x_src_list = []
+        additional_ds_list = []
+        inner_list = []
+        mask_list = []
+        true_r_list = []
+        normals_list = []
+        while torch.sum(mask) > 0:
+            premask, t, _, uvs_outer = outer_mesh.ray_tracer.trace(x_src_iter, ds)
+            x_src_iter = x_src_iter + ds_iter * t[:, None]
+
+            mask, true_r, normals_traced, uvs = fine_mesh.ray_tracer.trace(x_src_iter, ds_iter)
+            mask[true_r < 0] = 0
+
+            inner_mask, inner_t, _, uvs_inner = inner_mesh.ray_tracer.trace(x_src_iter, ds_iter)
+            x_src_inner = torch.zeros_like(x_src_iter)
+            x_src_inner[inner_mask] = x_src_iter[inner_mask] + ds_iter[inner_mask] * inner_t[inner_mask][:, None]
+            x_src_inner[~inner_mask] = 0
+            inner_t[~inner_mask] = 0
+
+            x_src_shifted = x_src_iter + ds_iter * 1e-3
+            outer_mask, outer_t, _, uvs = outer_mesh.ray_tracer.trace(x_src_shifted, ds_iter)
+            x_src_outer = torch.zeros_like(x_src_iter)
+            x_src_outer[outer_mask] = x_src_shifted[outer_mask] + ds_iter[outer_mask] * outer_t[outer_mask][:, None]
+            x_src_outer[~outer_mask] = 0
+            outer_t[~outer_mask] = 0
+            x_src_inner[~inner_mask & outer_mask] = x_src_shifted[~inner_mask & outer_mask]
+
+            additional_ray_mask = inner_mask & outer_mask & (true_r > outer_t) & (inner_t > outer_t)
+            additional_x_src_list.append(x_src_iter)
+            additional_ds_list.append(ds_iter)
+            x_src_iter = x_src_outer[additional_ray_mask] + ds_iter[additional_ray_mask] * 1e-3
+            ds_iter = ds_iter[additional_ray_mask]
+            mask[additional_ray_mask] = 0
+            true_r[additional_ray_mask] = 0
+            inner_list.append(x_src_inner)
+            mask_list.append(mask)
+            true_r_list.append(true_r)
+            normals_list.append(normals_traced)
+            mask = additional_ray_mask
+
+        x_src = torch.cat(additional_x_src_list, dim=0)
+        ds = torch.cat(additional_ds_list, dim=0)
+        x_src_inner = torch.cat(inner_list, dim=0)
+        mask = torch.cat(mask_list, dim=0)
+        true_r = torch.cat(true_r_list, dim=0)
+        normals_traced = torch.cat(normals_list, dim=0)
+
         true_intersection = mask.to(torch.float16)
 
-        inner_mask, inner_t, _, uvs_inner = inner_mesh.ray_tracer.trace(x_src, ds)
-        x_src_2 = torch.zeros_like(x_src)
-        x_src_2[inner_mask] = x_src[inner_mask] + ds[inner_mask] * inner_t[inner_mask][:, None]
-        x_src_2[~inner_mask] = 0
-
-        x_src_shifted = x_src + ds * 1e-3
-        premask2, t2, _, uvs = outer_mesh.ray_tracer.trace(x_src_shifted, ds)
-        x_src_2_shifted = torch.zeros_like(x_src)
-        x_src_2_shifted[premask2] = x_src_shifted[premask2] + ds[premask2] * t2[premask2][:, None]
-        x_src_2_shifted[~premask2] = 0
-        # x_src_2[~inner_mask & premask2] = x_src_2_shifted[~inner_mask & premask2]
-
         # TODO: don't train on rays that do not intersect outer shell
-        predicted_intersection, predicted_r, predicted_normal = model(x_src, x_src_2, ds, uvs_outer)
+        predicted_intersection, predicted_r, predicted_normal = model(x_src, x_src_inner, ds, uvs_outer)
 
         intersection_loss = torch.nn.BCEWithLogitsLoss(reduction='none')
         intersected_mask = predicted_intersection > 0
@@ -239,7 +307,7 @@ def main(cfg):
         writer, model_config, run_name, step
     )
 
-    eval_model(cfg, fine_mesh, outer_mesh, model)
+    eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model)
     save_checkpoint(cfg, model_config, model, averaged_model, optimizer, learing_rate_scheduler, run_name, cfg.train.epochs)
     
 

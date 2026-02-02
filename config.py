@@ -17,9 +17,9 @@ cfg.device = "cuda"
 # cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
 
-cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.fbx"
-cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000.fbx"
-cfg.inner_mesh_path = "/home/me/Downloads/chess_inner_10000.fbx"
+cfg.fine_mesh_path = "models/monkey_orig.fbx"
+cfg.outer_mesh_path = "models/monkey_outer_1000.fbx"
+cfg.inner_mesh_path = "models/monkey_inner_1000.fbx"
 
 # cfg.fine_mesh_path = "/home/me/Downloads/sphere_orig.obj"
 # cfg.outer_mesh_path = "/home/me/Downloads/sphere_outer.obj"
@@ -79,7 +79,7 @@ cfg.train = SimpleNamespace()
 
 # each epoch contains <cfg.train.sample_size> rays
 cfg.train.sample_size = 100_000
-cfg.train.epochs = 500_000
+cfg.train.epochs = 10_000
 
 cfg.train.learning_rate = 1e-3
 cfg.train.learning_rate_scheduler_min = 1.0
@@ -101,7 +101,7 @@ cfg.train.checkpoints_path = "checkpoints"
 cfg.train.checkpoints_interval = 500
 
 # tensorboard logging
-cfg.train.tensorboard = True
+cfg.train.tensorboard = False
 cfg.train.tensorboard_path = "runs"
 cfg.train.tensorboard_run_name = None
 
