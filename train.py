@@ -87,6 +87,9 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
             outer_t[~outer_mask] = 0
             x_src_inner[~inner_mask & outer_mask] = x_src_shifted[~inner_mask & outer_mask]
 
+            x_src_shifted2 = x_src_shifted + ds[mask_iter] * outer_t[:, None]
+            outer_mask2, outer_t2, _, uvs = outer_mesh.ray_tracer.trace(x_src_shifted, ds[mask_iter])
+
             predicted_intersection, predicted_r, predicted_normal = model(x_src[mask_iter], x_src_inner, ds[mask_iter], uvs_outer[mask])
             intersected_mask = predicted_intersection >= 0
             # intersected_mask = predicted_intersection >= -100
@@ -95,7 +98,7 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
             whole_predicted_normal[mask_iter] = predicted_normal
 
             whole_mask_iter = mask_iter.clone()
-            mask_iter_tmp = ~intersected_mask & inner_mask & outer_mask & (inner_t > outer_t)
+            mask_iter_tmp = ~intersected_mask & inner_mask & outer_mask & (inner_t > outer_t2 + outer_t)
             #print(mask_iter_tmp.sum().item())
             whole_mask_iter[mask_iter] = mask_iter_tmp
             x_src[whole_mask_iter] = x_src_outer[mask_iter_tmp] + ds[mask_iter][mask_iter_tmp] * 1e-3
@@ -117,7 +120,7 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
 def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, optimizer, scheduler, swa_scheduler, writer, model_config, run_name, step):
     mesh_min, mesh_max = outer_mesh.mesh.get_bounds()
     center = (mesh_min + mesh_max) / 2
-    radius = np.max(mesh_max - mesh_min) / 2
+    radius = np.sum((mesh_max - mesh_min) ** 2) ** 0.5 / 2
     print('Sample sphere radius =', radius)
 
     progress = tqdm(range(step, cfg.train.epochs))
@@ -139,7 +142,7 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         true_r_list = []
         normals_list = []
         while torch.sum(mask) > 0:
-            premask, t, _, uvs_outer = outer_mesh.ray_tracer.trace(x_src_iter, ds)
+            premask, t, _, uvs_outer = outer_mesh.ray_tracer.trace(x_src_iter, ds_iter)
             x_src_iter = x_src_iter + ds_iter * t[:, None]
 
             mask, true_r, normals_traced, uvs = fine_mesh.ray_tracer.trace(x_src_iter, ds_iter)
@@ -159,7 +162,10 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             outer_t[~outer_mask] = 0
             x_src_inner[~inner_mask & outer_mask] = x_src_shifted[~inner_mask & outer_mask]
 
-            additional_ray_mask = inner_mask & outer_mask & (true_r > outer_t) & (inner_t > outer_t)
+            x_src_shifted2 = x_src_shifted + ds_iter * outer_t[:, None]
+            outer_mask2, outer_t2, _, uvs = outer_mesh.ray_tracer.trace(x_src_shifted, ds_iter)
+
+            additional_ray_mask = inner_mask & outer_mask & (true_r > outer_t2 + outer_t) & (inner_t > outer_t2 + outer_t)
             additional_x_src_list.append(x_src_iter)
             additional_ds_list.append(ds_iter)
             x_src_iter = x_src_outer[additional_ray_mask] + ds_iter[additional_ray_mask] * 1e-3
