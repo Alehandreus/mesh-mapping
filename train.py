@@ -20,6 +20,8 @@ os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 from torch.utils.tensorboard import SummaryWriter
 
+eps = 1e-8
+
 
 def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step):
     checkpoint_data = {
@@ -81,7 +83,7 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
 
     i = 0
     while len(x_outer_enter) > 0:
-        x_outer_enter = x_outer_enter + ds_left * 1e-3
+        x_outer_enter = x_outer_enter + ds_left * eps
 
         # intersect orig mesh, inner shell and outer shell again 
         x_outer_exit_mask, x_outer_exit_t, _, _ = outer_mesh.ray_tracer.trace(
@@ -95,7 +97,7 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
 
         if (~x_outer_exit_mask).sum() > 0:
             # print(f"Warning no escape from outer shell! ({(~x_outer_exit_mask).sum().item()} rays)")
-            x_outer_exit_t[~x_outer_exit_mask] = 1e-3
+            x_outer_exit_t[~x_outer_exit_mask] = 1e-8
             x_outer_exit[~x_outer_exit_mask] = x_outer_enter[~x_outer_exit_mask] + ds_left[~x_outer_exit_mask] * x_outer_exit_t[~x_outer_exit_mask][:, None]
 
         x_inner_mask, x_inner_t, _, _ = inner_mesh.ray_tracer.trace(x_outer_enter, ds_left, allow_negative=False)
@@ -104,8 +106,9 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
 
         input_enter_points = x_outer_enter
         input_exit_points = torch.zeros_like(input_enter_points)
-        input_exit_points[x_inner_mask] = x_inner_enter[x_inner_mask]
-        input_exit_points[~x_inner_mask] = x_outer_exit[~x_inner_mask]
+        inner_apply = x_inner_mask & (x_inner_t < x_outer_exit_t)
+        input_exit_points[inner_apply] = x_inner_enter[inner_apply]
+        input_exit_points[~inner_apply] = x_outer_exit[~inner_apply]
         input_directions = ds_left
 
         pred_intersection, pred_t, pred_normal = model(
@@ -120,7 +123,7 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
         pred_t_global[mask_for_remaining_rays_global] = pred_t + accum_t
         pred_normal_global[mask_for_remaining_rays_global] = pred_normal
 
-        x_outer_exit = x_outer_exit + ds_left * 1e-3
+        x_outer_exit = x_outer_exit + ds_left * eps
         x_outer_enter_mask_new, x_outer_enter_t_new, _, _ = outer_mesh.ray_tracer.trace(
             x_outer_exit,
             ds_left,
@@ -199,7 +202,7 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         i = 0
         while len(x_outer_enter) > 0:
             # shift a bit into the outer shell
-            x_outer_enter = x_outer_enter + ds_left * 1e-3
+            x_outer_enter = x_outer_enter + ds_left * eps
 
             # intersect orig mesh, inner shell and outer shell again 
             x_outer_exit_mask, x_outer_exit_t, x_outer_exit_normals, _ = outer_mesh.ray_tracer.trace(
@@ -235,8 +238,9 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             # input for model
             input_enter_points = x_outer_enter
             input_exit_points = torch.zeros_like(input_enter_points)
-            input_exit_points[x_inner_mask] = x_inner_enter[x_inner_mask]
-            input_exit_points[~x_inner_mask] = x_outer_exit[~x_inner_mask]
+            inner_apply = x_inner_mask & (x_inner_t < x_outer_exit_t)
+            input_exit_points[inner_apply] = x_inner_enter[inner_apply]
+            input_exit_points[~inner_apply] = x_outer_exit[~inner_apply]
 
             # store results
             gt_intersection_mask_all.append(gt_intersection_mask)
@@ -246,7 +250,7 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             input_exit_points_list.append(input_exit_points)
             input_directions.append(ds_left)
 
-            x_outer_exit = x_outer_exit + ds_left * 1e-3
+            x_outer_exit = x_outer_exit + ds_left * eps
             x_outer_enter_mask_new, x_outer_enter_t_new, _, _ = outer_mesh.ray_tracer.trace(
                 x_outer_exit,
                 ds_left,

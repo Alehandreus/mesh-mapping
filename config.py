@@ -14,7 +14,7 @@ cfg.scale = 1.0
 # cfg.outer_mesh_path = "/home/me/Downloads/petmonster_outer_2000_uv.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/petmonster_inner_2000_uv.obj"
 
-cfg.scale = 100
+cfg.scale = 1
 cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.fbx"
 cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000.fbx"
 cfg.inner_mesh_path = "/home/me/Downloads/chess_inner_10000.fbx"
@@ -109,7 +109,7 @@ cfg.train.checkpoints_path = "checkpoints"
 cfg.train.checkpoints_interval = 500
 
 # tensorboard logging
-cfg.train.tensorboard = False
+cfg.train.tensorboard = True
 cfg.train.tensorboard_path = "runs"
 cfg.train.tensorboard_run_name = None
 
