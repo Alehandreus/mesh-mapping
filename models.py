@@ -36,7 +36,7 @@ class RayModel(nn.Module):
         
         self.network = tcnn.Network(self.mlp_input_dims, self.n_output_dims, self.network_config)
 
-    def forward(self, points, points_inner, directions, uvs_outer):
+    def forward(self, points, points_inner, directions, *args, **kwargs):
         directions = (directions + 1) / 2
         directions_enc = self.direction_encoding(directions).float()
 

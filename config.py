@@ -4,6 +4,7 @@ from types import SimpleNamespace
 cfg = SimpleNamespace()
 
 cfg.device = "cuda"
+cfg.scale = 1.0
 
 # cfg.fine_mesh_path = "models/superdragon_orig.obj"
 # cfg.outer_mesh_path = "models/superdragon_outer_5000_uv.obj"
@@ -13,17 +14,23 @@ cfg.device = "cuda"
 # cfg.outer_mesh_path = "/home/me/Downloads/petmonster_outer_2000_uv.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/petmonster_inner_2000_uv.obj"
 
-# cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.obj"
-# cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
-# cfg.inner_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
+cfg.scale = 100
+cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.obj"
+cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
+cfg.inner_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
 
-cfg.fine_mesh_path = "models/monkey_orig.fbx"
-cfg.outer_mesh_path = "models/monkey_outer_1000.fbx"
-cfg.inner_mesh_path = "models/monkey_inner_1000.fbx"
+# cfg.fine_mesh_path = "models/monkey_orig.fbx"
+# cfg.outer_mesh_path = "models/monkey_outer_1000.fbx"
+# cfg.inner_mesh_path = "models/monkey_inner_1000.fbx"
 
 # cfg.fine_mesh_path = "/home/me/Downloads/sphere_orig.obj"
 # cfg.outer_mesh_path = "/home/me/Downloads/sphere_outer.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/sphere_inner.obj"
+
+# cfg.scale = 0.001
+# cfg.fine_mesh_path = "/home/me/Downloads/statuette_orig.fbx"
+# cfg.outer_mesh_path = "/home/me/Downloads/statuette_outer_10000.fbx"
+# cfg.inner_mesh_path = "/home/me/Downloads/statuette_inner_10000.fbx"
 
 cfg.mesh_n_max_samples = 1_000_000
 
@@ -49,7 +56,7 @@ cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
     "n_features_per_level": 4,
-    "log2_hashmap_size": 14,
+    "log2_hashmap_size": 16,
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
@@ -101,7 +108,7 @@ cfg.train.checkpoints_path = "checkpoints"
 cfg.train.checkpoints_interval = 500
 
 # tensorboard logging
-cfg.train.tensorboard = False
+cfg.train.tensorboard = True
 cfg.train.tensorboard_path = "runs"
 cfg.train.tensorboard_run_name = None
 
