@@ -15,10 +15,11 @@ cfg.scale = 1.0
 # cfg.inner_mesh_path = "/home/me/Downloads/petmonster_inner_2000_uv.obj"
 
 cfg.scale = 100
-cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.obj"
-cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
-cfg.inner_mesh_path = "/home/me/Downloads/chess_outer_10000_uv.obj"
+cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.fbx"
+cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000.fbx"
+cfg.inner_mesh_path = "/home/me/Downloads/chess_inner_10000.fbx"
 
+# cfg.scale = 0.1
 # cfg.fine_mesh_path = "models/monkey_orig.fbx"
 # cfg.outer_mesh_path = "models/monkey_outer_1000.fbx"
 # cfg.inner_mesh_path = "models/monkey_inner_1000.fbx"
@@ -56,7 +57,7 @@ cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
     "n_features_per_level": 4,
-    "log2_hashmap_size": 16,
+    "log2_hashmap_size": 14,
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
@@ -86,7 +87,7 @@ cfg.train = SimpleNamespace()
 
 # each epoch contains <cfg.train.sample_size> rays
 cfg.train.sample_size = 100_000
-cfg.train.epochs = 10_000
+cfg.train.epochs = 500_000
 
 cfg.train.learning_rate = 1e-3
 cfg.train.learning_rate_scheduler_min = 1.0
@@ -108,7 +109,7 @@ cfg.train.checkpoints_path = "checkpoints"
 cfg.train.checkpoints_interval = 500
 
 # tensorboard logging
-cfg.train.tensorboard = True
+cfg.train.tensorboard = False
 cfg.train.tensorboard_path = "runs"
 cfg.train.tensorboard_run_name = None
 

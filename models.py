@@ -68,9 +68,13 @@ class RayModel(nn.Module):
 
         y = self.network(x).float()
 
+        # skip_mask = torch.norm(points - points_inner, dim=1) < 1e-3
+
         has_intersection = y[:, 0]
         distance = y[:, 1]
         normal = y[:, 2:]
+
+        # has_intersection[skip_mask] = -1.0
 
         normalized_normal = torch.zeros(normal.shape, dtype=normal.dtype, device=normal.device)
         if (normal.norm(dim=1) > 1e-8).any():

@@ -61,7 +61,13 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
     pred_t_global = torch.zeros((cam_poses.shape[0],), dtype=torch.float32, device=cfg.device)
     pred_normal_global = torch.zeros((cam_poses.shape[0], 3), dtype=torch.float32, device=cfg.device)
 
-    x_outer_enter_mask, x_outer_enter_t, _, _ = outer_mesh.ray_tracer.trace(cam_poses, ds, allow_negative=False)
+    x_outer_enter_mask, x_outer_enter_t, _, _ = outer_mesh.ray_tracer.trace(
+        cam_poses, 
+        ds,
+        allow_negative=False,
+        allow_backward=False,
+        allow_forward=True,        
+    )
     x_outer_enter = cam_poses + ds * x_outer_enter_t[:, None]
     x_outer_enter = x_outer_enter[x_outer_enter_mask]
 
@@ -73,11 +79,18 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
     # distance already accumulated along traced segments
     accum_t = x_outer_enter_t[x_outer_enter_mask]
 
+    i = 0
     while len(x_outer_enter) > 0:
         x_outer_enter = x_outer_enter + ds_left * 1e-3
 
         # intersect orig mesh, inner shell and outer shell again 
-        x_outer_exit_mask, x_outer_exit_t, _, _ = outer_mesh.ray_tracer.trace(x_outer_enter, ds_left, allow_negative=False)
+        x_outer_exit_mask, x_outer_exit_t, _, _ = outer_mesh.ray_tracer.trace(
+            x_outer_enter,
+            ds_left,
+            allow_negative=False,
+            allow_backward=True,
+            allow_forward=False,            
+        )
         x_outer_exit = x_outer_enter + ds_left * x_outer_exit_t[:, None]
 
         if (~x_outer_exit_mask).sum() > 0:
@@ -101,13 +114,20 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
             input_directions,
         )
         pred_intersection_mask = (pred_intersection >= 0)
+        pred_intersection_mask[x_inner_mask & (x_inner_t < x_outer_exit_t)] = True
 
         pred_intersection_global[mask_for_remaining_rays_global] = pred_intersection
         pred_t_global[mask_for_remaining_rays_global] = pred_t + accum_t
         pred_normal_global[mask_for_remaining_rays_global] = pred_normal
 
         x_outer_exit = x_outer_exit + ds_left * 1e-3
-        x_outer_enter_mask_new, x_outer_enter_t_new, _, _ = outer_mesh.ray_tracer.trace(x_outer_exit, ds_left, allow_negative=False)
+        x_outer_enter_mask_new, x_outer_enter_t_new, _, _ = outer_mesh.ray_tracer.trace(
+            x_outer_exit,
+            ds_left,
+            allow_negative=False,
+            allow_backward=False,
+            allow_forward=True,            
+        )
         x_outer_enter_new = x_outer_exit + ds_left * x_outer_enter_t_new[:, None]        
 
         # prepare for next iteration
@@ -117,7 +137,11 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
         ds_left = ds_left[mask_for_remaining_rays]
         accum_t = accum_t[mask_for_remaining_rays] + x_outer_exit_t[mask_for_remaining_rays] + x_outer_enter_t_new[mask_for_remaining_rays]
 
-        print("Remaining rays to trace:", x_outer_enter.shape[0])
+        # print("Remaining rays to trace:", x_outer_enter.shape[0])
+
+        i += 1
+        if i > 10:
+            break
 
     # prepare inputs for rendering
 
@@ -134,61 +158,6 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
     predicted_points = (cam_poses + ds * pred_t_global[:, None])[whole_intersected_mask]
 
     whole_predicted_normal = pred_normal_global.clone()
-
-    # true_mask, true_r, normals_traced, uvs = fine_mesh.ray_tracer.trace(cam_poses, ds)
-
-    # model.eval()
-    # render_iterations = 0
-    # mask_iter = torch.ones(cam_poses.shape[0], dtype=torch.bool, device=cfg.device)
-    # whole_intersected_mask = mask_iter.clone()
-    # whole_predicted_r = torch.zeros(cam_poses.shape[0], device=cfg.device)
-    # whole_predicted_normal = torch.zeros(cam_poses.shape, device=cfg.device)
-    # x_src = cam_poses.clone()
-    # while torch.sum(mask_iter) > 0 and render_iterations < 100:
-    #     mask, t, normals, uvs_outer = outer_mesh.ray_tracer.trace(x_src[mask_iter], ds[mask_iter])
-    #     x_src[mask_iter] = x_src[mask_iter] + ds[mask_iter] * t[:, None]
-
-    #     if render_iterations == 0:
-    #         whole_intersected_mask[mask_iter] = mask
-    #     whole_mask_iter = mask_iter.clone()
-    #     whole_mask_iter[mask_iter] = mask
-    #     mask_iter = whole_mask_iter
-
-    #     inner_mask, inner_t, _, uvs_inner = inner_mesh.ray_tracer.trace(x_src[mask_iter], ds[mask_iter])
-    #     x_src_inner = torch.zeros_like(x_src[mask_iter])
-    #     x_src_inner[inner_mask] = x_src[mask_iter][inner_mask] + ds[mask_iter][inner_mask] * inner_t[inner_mask][:, None]
-    #     x_src_inner[~inner_mask] = 0
-    #     inner_t[~inner_mask] = 0
-
-    #     x_src_shifted = x_src[mask_iter] + ds[mask_iter] * 1e-3
-    #     outer_mask, outer_t, _, uvs = outer_mesh.ray_tracer.trace(x_src_shifted, ds[mask_iter])
-    #     x_src_outer = torch.zeros_like(x_src[mask_iter])
-    #     x_src_outer[outer_mask] = x_src_shifted[outer_mask] + ds[mask_iter][outer_mask] * outer_t[outer_mask][:, None]
-    #     x_src_outer[~outer_mask] = 0
-    #     outer_t[~outer_mask] = 0
-    #     x_src_inner[~inner_mask & outer_mask] = x_src_shifted[~inner_mask & outer_mask]
-
-    #     x_src_shifted2 = x_src_shifted + ds[mask_iter] * outer_t[:, None]
-    #     outer_mask2, outer_t2, _, uvs = outer_mesh.ray_tracer.trace(x_src_shifted, ds[mask_iter])
-
-    #     predicted_intersection, predicted_r, predicted_normal = model(x_src[mask_iter], x_src_inner, ds[mask_iter], uvs_outer[mask])
-    #     intersected_mask = predicted_intersection >= 0
-    #     # intersected_mask = predicted_intersection >= -100
-    #     whole_intersected_mask[mask_iter] = intersected_mask
-    #     whole_predicted_r[mask_iter] = predicted_r
-    #     whole_predicted_normal[mask_iter] = predicted_normal
-
-    #     whole_mask_iter = mask_iter.clone()
-    #     mask_iter_tmp = ~intersected_mask & inner_mask & outer_mask & (inner_t > outer_t2 + outer_t)
-    #     #print(mask_iter_tmp.sum().item())
-    #     whole_mask_iter[mask_iter] = mask_iter_tmp
-    #     x_src[whole_mask_iter] = x_src_outer[mask_iter_tmp] + ds[mask_iter][mask_iter_tmp] * 1e-3
-    #     mask_iter = whole_mask_iter
-        
-    #     render_iterations += 1
-
-    # points = cam_poses[true_mask] + ds[true_mask] * true_r[true_mask][:, None] 
-    # predicted_points = x_src[whole_intersected_mask] + ds[whole_intersected_mask] * whole_predicted_r[whole_intersected_mask][:, None]
 
     mse, psnr, accuracy = render_predictions(
         cfg, points, predicted_points, cam_poses, 
@@ -211,9 +180,6 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         x, normals = sample_sphere_torch(radius + 0.1, center, cfg.train.sample_size, cfg.device)
         ds = sample_directions_torch(normals, cfg.device)
 
-        #premask, t, _, uvs_outer = outer_mesh.ray_tracer.trace(x, ds, allow_negative=True)
-        #x_src = x + ds * t[:, None]
-
         gt_intersection_mask_all = []
         gt_normals_all = []
         gt_distance_call = []
@@ -223,20 +189,30 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         input_directions = []
 
         # current point on the outer shell (enering another segment)
-        x_outer_enter_mask, x_outer_enter_t, _, _ = outer_mesh.ray_tracer.trace(x, ds, allow_negative=False)
+        x_outer_enter_mask, x_outer_enter_t, _, _ = outer_mesh.ray_tracer.trace(x, ds, allow_negative=False, allow_backward=False)
         x_outer_enter = x + ds * x_outer_enter_t[:, None]
         x_outer_enter = x_outer_enter[x_outer_enter_mask]
 
         # directions for rays left to trace
         ds_left = ds[x_outer_enter_mask]
 
+        i = 0
         while len(x_outer_enter) > 0:
             # shift a bit into the outer shell
             x_outer_enter = x_outer_enter + ds_left * 1e-3
 
             # intersect orig mesh, inner shell and outer shell again 
-            x_outer_exit_mask, x_outer_exit_t, _, _ = outer_mesh.ray_tracer.trace(x_outer_enter, ds_left, allow_negative=False)
+            x_outer_exit_mask, x_outer_exit_t, x_outer_exit_normals, _ = outer_mesh.ray_tracer.trace(
+                x_outer_enter,
+                ds_left,
+                allow_negative=False,
+                allow_backward=True,
+                allow_forward=False,
+            )
             x_outer_exit = x_outer_enter + ds_left * x_outer_exit_t[:, None]
+
+            # dot = (ds_left * x_outer_exit_normals).sum(dim=1)
+            # print(f"{(dot < 0).sum().item()} rays exiting outer shell have incorrect normal direction")
 
             if (~x_outer_exit_mask).sum() > 0:
                 # print(f"Warning no escape from outer shell! ({(~x_outer_exit_mask).sum().item()} rays)")
@@ -271,7 +247,13 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             input_directions.append(ds_left)
 
             x_outer_exit = x_outer_exit + ds_left * 1e-3
-            x_outer_enter_mask_new, x_outer_enter_t_new, _, _ = outer_mesh.ray_tracer.trace(x_outer_exit, ds_left, allow_negative=False)
+            x_outer_enter_mask_new, x_outer_enter_t_new, _, _ = outer_mesh.ray_tracer.trace(
+                x_outer_exit,
+                ds_left,
+                allow_negative=False,
+                allow_backward=False,
+                allow_forward=True,                
+            )
             x_outer_enter_new = x_outer_exit + ds_left * x_outer_enter_t_new[:, None]
 
             # prepare for next iteration
@@ -279,6 +261,9 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             x_outer_enter = x_outer_enter_new[mask_for_remaining_rays]
             ds_left = ds_left[mask_for_remaining_rays]
 
+            i += 1
+            if i > 10:
+                break
             # print('Remaining rays:', x_outer_enter.shape[0])
         
         gt_intersection_mask = torch.cat(gt_intersection_mask_all, dim=0)
