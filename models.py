@@ -20,7 +20,7 @@ class RayModel(nn.Module):
         self.direction_encoding_config = model_config.direction_encoding_config
 
         # output dimentions of mlp head: presence of intersection (1), distance (1) and normal (3)
-        self.n_output_dims = 5
+        self.n_output_dims = 8
 
         self.direction_encoding = tcnn.Encoding(3, self.direction_encoding_config)
 
@@ -30,9 +30,6 @@ class RayModel(nn.Module):
         elif model_config.encoding_type == "3d+1":
             self.point_encoding = tcnn.Encoding(3, self.point_encoding_config)
             self.mlp_input_dims = self.point_encoding.n_output_dims * 3 + self.direction_encoding.n_output_dims
-        elif model_config.encoding_type == "2d":
-            self.uv_encoding = tcnn.Encoding(2, self.uv_encoding_config)        
-            self.mlp_input_dims = self.uv_encoding.n_output_dims + self.direction_encoding.n_output_dims
         
         self.network = tcnn.Network(self.mlp_input_dims, self.n_output_dims, self.network_config)
 
@@ -59,12 +56,7 @@ class RayModel(nn.Module):
             points_interp = (points + points_inner) / 2
             points_interp_enc = self.point_encoding(points_interp).float()
 
-            x = torch.cat([points_enc, points_inner_enc, points_interp_enc, directions_enc], dim=1)
-
-        elif self.model_config.encoding_type == "2d":
-            uvs_outer_enc = self.uv_encoding(uvs_outer).float()
-
-            x = torch.cat([uvs_outer_enc, directions_enc], dim=1)        
+            x = torch.cat([points_enc, points_inner_enc, points_interp_enc, directions_enc], dim=1)    
 
         y = self.network(x).float()
 
@@ -72,7 +64,8 @@ class RayModel(nn.Module):
 
         has_intersection = y[:, 0]
         distance = y[:, 1]
-        normal = y[:, 2:]
+        normal = y[:, 2:5]
+        colors = y[:, 5:8]
 
         # has_intersection[skip_mask] = -1.0
 
@@ -80,4 +73,4 @@ class RayModel(nn.Module):
         if (normal.norm(dim=1) > 1e-8).any():
             normalized_normal[normal.norm(dim=1) > 1e-8] = (normal / normal.norm(dim=1, keepdim=True))[normal.norm(dim=1) > 1e-8]
         
-        return has_intersection, distance, normalized_normal
+        return has_intersection, distance, normalized_normal, colors

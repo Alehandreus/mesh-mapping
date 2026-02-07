@@ -14,10 +14,15 @@ cfg.scale = 1.0
 # cfg.outer_mesh_path = "/home/me/Downloads/petmonster_outer_2000_uv.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/petmonster_inner_2000_uv.obj"
 
-cfg.scale = 1
-cfg.fine_mesh_path = "/home/me/Downloads/chess_orig.fbx"
-cfg.outer_mesh_path = "/home/me/Downloads/chess_outer_10000.fbx"
-cfg.inner_mesh_path = "/home/me/Downloads/chess_inner_10000.fbx"
+cfg.scale = 100
+cfg.fine_mesh_path = "/home/me/brain/scenes/Chess/ours/meshes/chess_neural.glb"
+cfg.outer_mesh_path = "/home/me/brain/scenes/Chess/ours/meshes/chess_outer_10000_minconst.obj"
+cfg.inner_mesh_path = "/home/me/brain/scenes/Chess/ours/meshes/chess_inner_10000.obj"
+
+# cfg.scale = 10
+# cfg.fine_mesh_path = "/home/me/brain/scenes/Andalusian/ours/meshes/andalusian_orig.obj"
+# cfg.outer_mesh_path = "/home/me/brain/scenes/Andalusian/ours/meshes/andalusian_outer_10000_voxel.obj"
+# cfg.inner_mesh_path = "/home/me/brain/scenes/Andalusian/ours/meshes/andalusian_inner_10000.obj"
 
 # cfg.scale = 0.1
 # cfg.fine_mesh_path = "models/monkey_orig.fbx"
@@ -27,6 +32,11 @@ cfg.inner_mesh_path = "/home/me/Downloads/chess_inner_10000.fbx"
 # cfg.fine_mesh_path = "/home/me/Downloads/sphere_orig.obj"
 # cfg.outer_mesh_path = "/home/me/Downloads/sphere_outer.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/sphere_inner.obj"
+
+# cfg.scale = 0.1
+# cfg.fine_mesh_path = "/home/me/Downloads/statuette_orig.obj"
+# cfg.outer_mesh_path = "/home/me/Downloads/statuette_outer_10000_voxel.obj"
+# cfg.inner_mesh_path = "/home/me/Downloads/statuette_inner_10000.obj"
 
 # cfg.scale = 0.001
 # cfg.fine_mesh_path = "/home/me/Downloads/statuette_orig.fbx"
@@ -58,6 +68,7 @@ cfg.model.point_encoding_config = {
     "n_levels": 8,
     "n_features_per_level": 4,
     "log2_hashmap_size": 14,
+    # "base_resolution": 16,
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
@@ -135,3 +146,6 @@ cfg.visualization.preview_path = "preview"
 cfg.visualization.fine_mesh_preview_name = "fine_preview.png"
 cfg.visualization.outer_mesh_preview_name = "outer_preview.png"
 cfg.visualization.inner_mesh_preview_name = "inner_preview.png"
+
+# cfg.visualization.camera_angle = 135
+cfg.visualization.camera_angle = 0

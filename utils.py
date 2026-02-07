@@ -17,26 +17,27 @@ class MeshWrapper:
 
     @classmethod
     def from_file(cls, path, *, n_max_samples = 1_000_000, bvh_depth = 25, scale=None):
-        mesh = Mesh.from_file(path, False)
-        if scale is not None:
-            vertices = mesh.get_vertices()
-            vertices = vertices * scale
+        mesh = Mesh.from_file(path, False, scale=scale)
+        # if scale is not None:
+        #     vertices = mesh.get_vertices()
+        #     vertices = vertices * scale
 
-            if mesh.has_uvs():
-                mesh = Mesh.from_data_with_uvs(vertices, mesh.get_faces(), mesh.get_uvs())
-            else:
-                mesh = Mesh.from_data(vertices, mesh.get_faces())
+        #     if mesh.has_uvs():
+        #         mesh = Mesh.from_data_with_uvs(vertices, mesh.get_faces(), mesh.get_uvs())
+        #     else:
+        #         mesh = Mesh.from_data(vertices, mesh.get_faces())
 
         builder = CPUBuilder(mesh)
         bvh = builder.build_bvh(bvh_depth)
-        mesh = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
+        # mesh = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
 
         sampler = GPUMeshSampler(mesh, MeshSamplerMode.SURFACE_UNIFORM, n_max_samples)
         traverser = GPUTraverser(bvh)
         ray_tracer = GPURayTracer(bvh)
 
-        mesh_split = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
-        return cls(mesh, mesh_split, sampler, traverser, ray_tracer)
+        # mesh_split = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
+        # print(f"Mesh after BVH split has {mesh_split.get_vertices().shape[0]} vertices and {mesh_split.get_faces().shape[0]} faces.")
+        return cls(mesh, None, sampler, traverser, ray_tracer)
 
 @torch.no_grad()
 def sample_points(sampler, batch_size, device):
