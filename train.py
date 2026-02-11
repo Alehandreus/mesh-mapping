@@ -10,7 +10,7 @@ import math
 import copy
 from tqdm import tqdm
 from utils import MeshWrapper, sample_directions_torch, sample_sphere_torch, get_camera_rays
-from visualization import save_mesh_previews, render_predictions
+from visualization import save_mesh_previews, render_predictions, render_predictions_with_neural_renderer
 
 from models import RayModel
 import time
@@ -184,7 +184,6 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
     return mse, psnr, accuracy
 
 
-
 def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, optimizer, scheduler, swa_scheduler, writer, model_config, run_name, step):
     mesh_min, mesh_max = outer_mesh.mesh.get_bounds()
     center = (mesh_min + mesh_max) / 2
@@ -339,13 +338,17 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         mse = 0
         psnr = 0
         accuracy = 0
+        flip = 0
         info = ""
-        if epoch % cfg.visualization.render_interval == cfg.visualization.render_interval - 1:
-            mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, averaged_model)
-            info += f"MSE={mse:.6f}, PSNR={psnr:.4f}"
-        if epoch % cfg.train.checkpoints_interval == cfg.train.checkpoints_interval - 1:
-            info += f" dist={distance_loss.item():.4f}, entr={cls_loss.item():.4f}, norm={normal_loss.item():.4f}, total={loss.item():.4f}"
+        if epoch % cfg.train.evaluation_interval == cfg.train.evaluation_interval - 1:
             save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step)
+            if cfg.visualization.use_neural_renderer:
+                psnr, flip = render_predictions_with_neural_renderer(cfg, run_name)
+                info += f"PSNR={psnr:.4f}, FLIP={flip:.4f}, "
+            else:
+                mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, averaged_model)
+                info += f"MSE={mse:.6f}, PSNR={psnr:.4f}, "
+            info += f"dist={distance_loss.item():.4f}, entr={cls_loss.item():.4f}, norm={normal_loss.item():.4f}, total={loss.item():.4f}"
         if info != "":
             progress.set_postfix_str(info)
         if cfg.train.tensorboard:
@@ -361,6 +364,8 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
                 writer.add_scalar("PSNR", psnr, epoch * cfg.train.sample_size)            
             if accuracy > 0:
                 writer.add_scalar("Accuracy", accuracy, epoch * cfg.train.sample_size)
+            if flip > 0:
+                writer.add_scalar("FLIP", flip, epoch * cfg.train.sample_size)
             writer.flush()
 
     return model

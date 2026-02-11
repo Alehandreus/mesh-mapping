@@ -19,7 +19,7 @@ class RayModel(nn.Module):
         self.uv_encoding_config = model_config.uv_encoding_config
         self.direction_encoding_config = model_config.direction_encoding_config
 
-        # output dimentions of mlp head: presence of intersection (1), distance (1) and normal (3)
+        # output dimentions of mlp head: presence of intersection (1), distance (1), normal (3) and color (3)
         self.n_output_dims = 8
 
         self.direction_encoding = tcnn.Encoding(3, self.direction_encoding_config)

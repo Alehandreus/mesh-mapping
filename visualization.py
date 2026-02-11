@@ -1,5 +1,8 @@
 import torch
 import numpy as np
+import json
+import subprocess
+from pathlib import Path
 from PIL import Image
 
 
@@ -72,3 +75,50 @@ def render_predictions(cfg, points, predicted_points, cam_poses, normals_traced,
     accuracy = accuracy.sum() / accuracy.size
 
     return mse, psnr, accuracy
+
+def prepare_neural_renderer(cfg, run_name):
+    with open(cfg.visualization.config_json_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    paths = [cfg.fine_mesh_path, cfg.inner_mesh_path, cfg.outer_mesh_path]
+    names = ["original_mesh", "inner_shell", "outer_shell"]
+    if "scene" not in config:
+            config["scene"] = {}
+    for path, name in zip(paths, names):
+        texture_usage = True
+        path = str(Path(path).resolve())
+        if path[:-4] in [".fbx", ".obj"]:
+            texture_usage = False
+        config["scene"][name] = {
+            "path": path,
+            "scale": 1.0,
+            "use_texture_color": texture_usage
+        }
+    checkpoint_path = Path(f"{cfg.train.checkpoints_path}/{run_name}.bin")
+    config["checkpoint_path"] = str(checkpoint_path.resolve())
+
+    mid_point = False
+    if cfg.model.encoding_type == "3d+1":
+        mid_point = True
+    config["neural_network"] = {
+        "log2_hashmap_size": cfg.model.point_encoding_config["log2_hashmap_size"],
+        "use_neural_query": True,
+        "use_midpoint_encoding": mid_point
+    }
+
+    with open(cfg.visualization.tmp_config_json_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=4, ensure_ascii=False)
+
+def render_predictions_with_neural_renderer(cfg, run_name):
+    prepare_neural_renderer(cfg, run_name)
+
+    neural_renderer_path = Path(cfg.visualization.neural_renderer_path)
+    tmp_config_json_path = Path(cfg.visualization.tmp_config_json_path)
+    logs = subprocess.run([str(neural_renderer_path.resolve()), str(tmp_config_json_path.resolve())], capture_output=True, text=True)
+    logs = str(logs)
+
+    psnr_index = logs.find("PSNR:") + 6
+    psnr = float(logs[psnr_index:logs.find(' ', psnr_index)])
+    flip_index = logs.find("FLIP:") + 6
+    flip = float(logs[flip_index:logs.find(' ', flip_index)])
+    return psnr, flip

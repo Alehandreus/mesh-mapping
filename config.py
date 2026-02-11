@@ -14,10 +14,9 @@ cfg.scale = 1.0
 # cfg.outer_mesh_path = "/home/me/Downloads/petmonster_outer_2000_uv.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/petmonster_inner_2000_uv.obj"
 
-cfg.scale = 100
-cfg.fine_mesh_path = "/home/me/brain/scenes/Chess/ours/meshes/chess_neural.glb"
-cfg.outer_mesh_path = "/home/me/brain/scenes/Chess/ours/meshes/chess_outer_10000_minconst.obj"
-cfg.inner_mesh_path = "/home/me/brain/scenes/Chess/ours/meshes/chess_inner_10000.obj"
+cfg.fine_mesh_path = "models/andalusian_orig2.fbx"
+cfg.outer_mesh_path = "models/andalusian_outer_10000_new4.fbx"
+cfg.inner_mesh_path = "models/andalusian_inner_10000.fbx"
 
 # cfg.scale = 10
 # cfg.fine_mesh_path = "/home/me/brain/scenes/Andalusian/ours/meshes/andalusian_orig.obj"
@@ -117,7 +116,7 @@ cfg.train.model_start_checkpoint = None
 # path where checkpoint will be saved during training
 cfg.train.model_save_checkpoint = None
 cfg.train.checkpoints_path = "checkpoints"
-cfg.train.checkpoints_interval = 500
+cfg.train.evaluation_interval = 500
 
 # tensorboard logging
 cfg.train.tensorboard = True
@@ -132,7 +131,6 @@ cfg.visualization = SimpleNamespace()
 cfg.visualization.image_size = 2048
 
 cfg.visualization.light_normal = [1.0, 1.0, 1.0]
-cfg.visualization.render_interval = cfg.train.checkpoints_interval
 # directory where all rendered images will be saved
 cfg.visualization.render_path = "rendered"
 cfg.visualization.true_distance_render_name = "true_distance_map.png"
@@ -149,3 +147,8 @@ cfg.visualization.inner_mesh_preview_name = "inner_preview.png"
 
 # cfg.visualization.camera_angle = 135
 cfg.visualization.camera_angle = 0
+
+cfg.visualization.use_neural_renderer = True
+cfg.visualization.neural_renderer_path = "/mnt/Programming/RenderingProjects/neural-renderer/build/evaluate"
+cfg.visualization.config_json_path = "configs/andalusian.json"
+cfg.visualization.tmp_config_json_path = "/tmp/config.json"
