@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import math
 import copy
 from tqdm import tqdm
-from utils import MeshWrapper, sample_directions_torch, sample_sphere_torch, get_camera_rays
+from utils import MeshWrapper, sample_directions_torch, sample_sphere_torch, get_camera_rays, sample_points
 from visualization import save_mesh_previews, render_predictions, render_predictions_with_neural_renderer
 
 from models import RayModel
@@ -44,12 +44,12 @@ def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, schedul
     checkpoint_name = f"{cfg.train.checkpoints_path}/{run_name}.pt"
     torch.save(checkpoint_data, checkpoint_name)
 
-    if copy_model.model_config.encoding_type == "3d":
-        point_encoding_params = copy_model.point_encoding.params.data.cpu().numpy().astype(np.float16)
-        direction_encoding_params = copy_model.direction_encoding.params.data.cpu().numpy().astype(np.float16)
-        network_params = copy_model.network.params.data.cpu().numpy().astype(np.float16)
-        total_params = np.concatenate([point_encoding_params, direction_encoding_params, network_params])
-        total_params.tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
+    #if copy_model.model_config.encoding_type == "3d":
+    point_encoding_params = copy_model.point_encoding.params.data.cpu().numpy().astype(np.float16)
+    direction_encoding_params = copy_model.direction_encoding.params.data.cpu().numpy().astype(np.float16)
+    network_params = copy_model.network.params.data.cpu().numpy().astype(np.float16)
+    total_params = np.concatenate([point_encoding_params, direction_encoding_params, network_params])
+    total_params.tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
 
 
 @torch.no_grad()
@@ -187,13 +187,15 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
 def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, optimizer, scheduler, swa_scheduler, writer, model_config, run_name, step):
     mesh_min, mesh_max = outer_mesh.mesh.get_bounds()
     center = (mesh_min + mesh_max) / 2
-    radius = np.sum((mesh_max - mesh_min) ** 2) ** 0.5 / 2
+    radius = np.sum((mesh_max - mesh_min) ** 2) ** 0.5
+    print('Sample sphere center =', center)
     print('Sample sphere radius =', radius)
 
     progress = tqdm(range(step, cfg.train.epochs))
     for epoch in progress:
         model.train()
-        x, normals = sample_sphere_torch(radius + 0.1, center, cfg.train.sample_size, cfg.device)
+        #x, normals = sample_sphere_torch(radius + 0.1, center, cfg.train.sample_size, cfg.device)
+        x, normals, _ = sample_points(outer_mesh.sampler, cfg.train.sample_size, cfg.device)
         ds = sample_directions_torch(normals, cfg.device)
 
         gt_intersection_mask_all = []
@@ -320,9 +322,8 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             gt_normals[gt_intersection_mask],
             dim=1,
             eps=1e-6
-        ).mean()
-
-        loss = cls_loss + normal_loss + color_loss * 100 #+ distance_loss
+        ).mean() + 1.0
+        loss = cls_loss + normal_loss * 10 + color_loss * 100 #+ distance_loss
 
         optimizer.zero_grad()
         loss.backward()
@@ -348,7 +349,7 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             else:
                 mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, averaged_model)
                 info += f"MSE={mse:.6f}, PSNR={psnr:.4f}, "
-            info += f"dist={distance_loss.item():.4f}, entr={cls_loss.item():.4f}, norm={normal_loss.item():.4f}, total={loss.item():.4f}"
+            info += f"dist={distance_loss.item():.4f}, entr={cls_loss.item():.4f}, norm={normal_loss.item():.4f}, clr={color_loss.item():.4f}, total={loss.item():.4f}"
         if info != "":
             progress.set_postfix_str(info)
         if cfg.train.tensorboard:

@@ -211,6 +211,7 @@ def sample_sphere(radius, center, sample_size):
 def sample_sphere_torch(radius, center, sample_size, device):
     thetas = torch.rand(sample_size, device=device) * torch.pi
     phis = torch.rand(sample_size, device=device) * 2 * torch.pi
+    #radius = torch.rand(sample_size, device=device) * radius
 
     sin_thetas = torch.sin(thetas)
     x = sin_thetas * torch.cos(phis) * radius

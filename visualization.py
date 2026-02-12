@@ -15,6 +15,7 @@ def save_mesh_previews(meshes, size):
 def render_image(data, mask, image_size, path, device):
     map = torch.zeros((image_size * image_size, 3), dtype=torch.float32, device=device)
     map[mask] = data
+    # map[~mask] = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32, device=device)
 
     map = map.cpu().numpy()
     map = map.reshape(image_size, image_size, 3)
@@ -87,7 +88,7 @@ def prepare_neural_renderer(cfg, run_name):
     for path, name in zip(paths, names):
         texture_usage = True
         path = str(Path(path).resolve())
-        if path[:-4] in [".fbx", ".obj"]:
+        if path[-4:] in [".fbx", ".obj"]:
             texture_usage = False
         config["scene"][name] = {
             "path": path,
@@ -116,7 +117,6 @@ def render_predictions_with_neural_renderer(cfg, run_name):
     tmp_config_json_path = Path(cfg.visualization.tmp_config_json_path)
     logs = subprocess.run([str(neural_renderer_path.resolve()), str(tmp_config_json_path.resolve())], capture_output=True, text=True)
     logs = str(logs)
-
     psnr_index = logs.find("PSNR:") + 6
     psnr = float(logs[psnr_index:logs.find(' ', psnr_index)])
     flip_index = logs.find("FLIP:") + 6
