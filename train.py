@@ -206,9 +206,10 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         input_enter_points_list = []
         input_exit_points_list = []
         input_directions = []
+        input_outer_normals = []
 
         # current point on the outer shell (enering another segment)
-        x_outer_enter_mask, x_outer_enter_t, _, _, _ = outer_mesh.ray_tracer.trace(x, ds, allow_negative=False, allow_backward=False)
+        x_outer_enter_mask, x_outer_enter_t, x_outer_enter_normals, _, _ = outer_mesh.ray_tracer.trace(x, ds, allow_negative=False, allow_backward=False)
         x_outer_enter = x + ds * x_outer_enter_t[:, None]
         x_outer_enter = x_outer_enter[x_outer_enter_mask]
 
@@ -267,9 +268,10 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             input_enter_points_list.append(input_enter_points)
             input_exit_points_list.append(input_exit_points)
             input_directions.append(ds_left)
+            input_outer_normals.append(x_outer_enter_normals)
 
             x_outer_exit = x_outer_exit + ds_left * eps
-            x_outer_enter_mask_new, x_outer_enter_t_new, _, _, _ = outer_mesh.ray_tracer.trace(
+            x_outer_enter_mask_new, x_outer_enter_t_new, x_outer_enter_normals_new, _, _ = outer_mesh.ray_tracer.trace(
                 x_outer_exit,
                 ds_left,
                 allow_negative=False,
@@ -281,6 +283,7 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
             # prepare for next iteration
             mask_for_remaining_rays = ~gt_intersection_mask & x_orig_mask & x_outer_exit_mask & x_outer_enter_mask_new
             x_outer_enter = x_outer_enter_new[mask_for_remaining_rays]
+            x_outer_enter_normals = x_outer_enter_normals_new[mask_for_remaining_rays]
             ds_left = ds_left[mask_for_remaining_rays]
 
             i += 1
@@ -295,12 +298,14 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         input_enter_points = torch.cat(input_enter_points_list, dim=0)
         input_exit_points = torch.cat(input_exit_points_list, dim=0)
         input_directions = torch.cat(input_directions, dim=0)
+        input_outer_normals = torch.cat(input_outer_normals, dim=0)
 
         predicted_intersection_mask, predicted_t, predicted_normals, predicted_colors = model(
             input_enter_points,
             input_exit_points,
             input_directions,
         )
+        predicted_normals = predicted_normals + input_outer_normals
 
         color_loss = F.mse_loss(
             predicted_colors[gt_intersection_mask],

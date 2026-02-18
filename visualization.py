@@ -77,35 +77,27 @@ def render_predictions(cfg, points, predicted_points, cam_poses, normals_traced,
 
     return mse, psnr, accuracy
 
+def _resolve_path(base_dir, path_str):
+    p = Path(path_str)
+    if not p.is_absolute():
+        p = (base_dir / p).resolve()
+    return str(p)
+
 def prepare_neural_renderer(cfg, run_name):
-    with open(cfg.visualization.config_json_path, "r", encoding="utf-8") as f:
+    json_path = Path(cfg.json_config_path).resolve()
+    base_dir = json_path.parent
+    with open(json_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    paths = [cfg.fine_mesh_path, cfg.inner_mesh_path, cfg.outer_mesh_path]
-    names = ["original_mesh", "inner_shell", "outer_shell"]
-    if "scene" not in config:
-            config["scene"] = {}
-    for path, name in zip(paths, names):
-        texture_usage = True
-        path = str(Path(path).resolve())
-        if path[-4:] in [".fbx", ".obj"]:
-            texture_usage = False
-        config["scene"][name] = {
-            "path": path,
-            "scale": 1.0,
-            "use_texture_color": texture_usage
-        }
+    for key in ("original_mesh", "inner_shell", "outer_shell", "additional_mesh"):
+        if key in config.get("scene", {}):
+            config["scene"][key]["path"] = _resolve_path(base_dir, config["scene"][key]["path"])
+
+    if "hdri_path" in config.get("environment", {}):
+        config["environment"]["hdri_path"] = _resolve_path(base_dir, config["environment"]["hdri_path"])
+
     checkpoint_path = Path(f"{cfg.train.checkpoints_path}/{run_name}.bin")
     config["checkpoint_path"] = str(checkpoint_path.resolve())
-
-    mid_point = False
-    if cfg.model.encoding_type == "3d+1":
-        mid_point = True
-    config["neural_network"] = {
-        "log2_hashmap_size": cfg.model.point_encoding_config["log2_hashmap_size"],
-        "use_neural_query": True,
-        "use_midpoint_encoding": mid_point
-    }
 
     with open(cfg.visualization.tmp_config_json_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=4, ensure_ascii=False)
@@ -117,8 +109,12 @@ def render_predictions_with_neural_renderer(cfg, run_name):
     tmp_config_json_path = Path(cfg.visualization.tmp_config_json_path)
     logs = subprocess.run([str(neural_renderer_path.resolve()), str(tmp_config_json_path.resolve())], capture_output=True, text=True)
     logs = str(logs)
-    psnr_index = logs.find("PSNR:") + 6
-    psnr = float(logs[psnr_index:logs.find(' ', psnr_index)])
-    flip_index = logs.find("FLIP:") + 6
-    flip = float(logs[flip_index:logs.find(' ', flip_index)])
+    try:
+        psnr_index = logs.find("PSNR:") + 6
+        psnr = float(logs[psnr_index:logs.find(' ', psnr_index)])
+        flip_index = logs.find("FLIP:") + 6
+        flip = float(logs[flip_index:logs.find(' ', flip_index)])
+    except Exception as e:
+        print("Failed to parse neural renderer output:", logs)
+        exit()
     return psnr, flip
