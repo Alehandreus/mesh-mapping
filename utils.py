@@ -1,82 +1,32 @@
 import numpy as np
 import torch
 from dataclasses import dataclass
-from mesh_utils import Mesh, MeshSamplerMode, GPUMeshSampler
-from mesh_utils import GPUTraverser, CPUBuilder, GPURayTracer
+from mesh_utils import Mesh, GPURayTracer, GPUSampler
 
 
 @dataclass
 class MeshWrapper:
-    """Wraps mesh data with GPU helpers for sampling, traversal, and ray tracing."""
-
     mesh: Mesh
-    mesh_split: Mesh
-    sampler: GPUMeshSampler
-    traverser: GPUTraverser
+    sampler: GPUSampler
     ray_tracer: GPURayTracer
 
     @classmethod
-    def from_file(cls, path, *, n_max_samples = 1_000_000, bvh_depth = 25, scale=None):
-        mesh = Mesh.from_file(path, False, scale=scale)
-        # if scale is not None:
-        #     vertices = mesh.get_vertices()
-        #     vertices = vertices * scale
+    def from_file(cls, path, n_max_samples, scale):
+        mesh = Mesh.from_file(path, build_bvh=True, max_leaf_size=5, smooth_normals=True, scale=scale)
+        ray_tracer = GPURayTracer(mesh)
+        sampler = GPUSampler(mesh, n_max_samples)
+        return cls(mesh, sampler, ray_tracer)
 
-        #     if mesh.has_uvs():
-        #         mesh = Mesh.from_data_with_uvs(vertices, mesh.get_faces(), mesh.get_uvs())
-        #     else:
-        #         mesh = Mesh.from_data(vertices, mesh.get_faces())
+# @torch.no_grad()
+# def sample_points(sampler, batch_size, device):
+#     points = torch.zeros((batch_size, 3), dtype=torch.float32, device=device)
+#     barycentrics = torch.zeros((batch_size, 3), dtype=torch.float32, device=device)
+#     face_idxs = torch.zeros((batch_size,), dtype=torch.uint32, device=device)
 
-        builder = CPUBuilder(mesh)
-        bvh = builder.build_bvh(bvh_depth)
-        # mesh = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
+#     sampler.sample(points, barycentrics, face_idxs, batch_size)
 
-        sampler = GPUMeshSampler(mesh, MeshSamplerMode.SURFACE_UNIFORM, n_max_samples)
-        traverser = GPUTraverser(bvh)
-        ray_tracer = GPURayTracer(bvh)
+#     return points, barycentrics, face_idxs.long()
 
-        # mesh_split = Mesh.from_data(bvh.get_vertices(), bvh.get_faces())
-        # print(f"Mesh after BVH split has {mesh_split.get_vertices().shape[0]} vertices and {mesh_split.get_faces().shape[0]} faces.")
-        return cls(mesh, None, sampler, traverser, ray_tracer)
-
-@torch.no_grad()
-def sample_points(sampler, batch_size, device):
-    points = torch.zeros((batch_size, 3), dtype=torch.float32, device=device)
-    barycentrics = torch.zeros((batch_size, 3), dtype=torch.float32, device=device)
-    face_idxs = torch.zeros((batch_size,), dtype=torch.uint32, device=device)
-
-    sampler.sample(points, barycentrics, face_idxs, batch_size)
-
-    return points, barycentrics, face_idxs.long()
-
-
-@torch.no_grad()
-def point_query(traverser, points, device):
-    t = torch.zeros((points.size(0),), dtype=torch.float32, device=device)
-    closest_pts = torch.zeros((points.size(0), 3), dtype=torch.float32, device=device)
-    barycentrics = torch.zeros((points.size(0), 3), dtype=torch.float32, device=device)
-    face_idxs = torch.zeros((points.size(0),), dtype=torch.uint32, device=device)
-    
-    traverser.point_query(points, t, closest_pts, barycentrics, face_idxs)
-
-    return t, closest_pts, barycentrics, face_idxs.long()
-
-def chamfer_distance(a, b):
-    """Compute bidirectional Chamfer distance between two point clouds a and b.
-    a: (N, 3)
-    b: (M, 3)
-    Returns: scalar Chamfer distance
-    """
-    N, M = a.size(0), b.size(0)
-    a_exp = a.unsqueeze(1).expand(N, M, 3)  # (N, M, 3)
-    b_exp = b.unsqueeze(0).expand(N, M, 3)  # (N, M, 3)
-    dists = torch.norm(a_exp - b_exp, dim=2)  # (N, M)
-
-    min_a_to_b, _ = torch.min(dists, dim=1)  # (N,)
-    min_b_to_a, _ = torch.min(dists, dim=0)  # (M,)
-
-    cd = min_a_to_b.mean() + min_b_to_a.mean()
-    return cd
 
 def get_camera_rays(mesh, img_size, device, angle=0.0, distance_scale=1.0):
     """
@@ -135,6 +85,7 @@ def get_camera_rays(mesh, img_size, device, angle=0.0, distance_scale=1.0):
 
     return d_cam_poses, d_dirs
 
+
 def calculate_normals(faces, vertices, face_ids):
     v0_ids = faces[face_ids, 0]
     v1_ids = faces[face_ids, 1]
@@ -146,6 +97,7 @@ def calculate_normals(faces, vertices, face_ids):
 
     normals = np.cross(v1s - v0s, v2s - v0s, axis=1)
     return normals / np.linalg.norm(normals, axis=1)[:, None]
+
 
 def sample_directions(normals, device):
     thetas = np.random.uniform(0, np.pi, size=normals.shape[0])
@@ -167,6 +119,7 @@ def sample_directions(normals, device):
 
     prop_ds = np.einsum('ijk,ik->ij', basis_coefs, vector)
     return torch.tensor(prop_ds, device=device)
+
 
 def sample_directions_torch(normals, device):
     prop_ds = torch.randn(normals.shape, device=device)
@@ -195,6 +148,7 @@ def sample_directions_torch(normals, device):
     # prop_ds = torch.einsum('ijk,ik->ij', basis_coefs, vector)
     # return prop_ds
 
+
 def sample_sphere(radius, center, sample_size):
     thetas = np.random.uniform(0, np.pi, size=sample_size)
     phis = np.random.uniform(0, 2 * np.pi, size=sample_size)
@@ -207,6 +161,7 @@ def sample_sphere(radius, center, sample_size):
     normals = points / np.linalg.norm(points, axis=1)[:, None]
 
     return points, normals
+
 
 def sample_sphere_torch(radius, center, sample_size, device):
     thetas = torch.rand(sample_size, device=device) * torch.pi
