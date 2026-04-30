@@ -4,7 +4,7 @@ from types import SimpleNamespace
 cfg = SimpleNamespace()
 
 cfg.device = "cuda"
-cfg.scale = 100
+cfg.scale = 10
 
 # cfg.fine_mesh_path = "models/superdragon_orig.obj"
 # cfg.outer_mesh_path = "models/superdragon_outer_5000_uv.obj"
@@ -14,7 +14,7 @@ cfg.scale = 100
 # cfg.outer_mesh_path = "/home/me/Downloads/petmonster_outer_2000_uv.obj"
 # cfg.inner_mesh_path = "/home/me/Downloads/petmonster_inner_2000_uv.obj"
 
-cfg.fine_mesh_path = "models/chess_neural.glb"
+cfg.fine_mesh_path = "models/chess_orig.obj"
 cfg.outer_mesh_path = "models/chess_outer_10000_minconst.obj"
 cfg.inner_mesh_path = "models/chess_inner_10000.obj"
 
@@ -50,8 +50,8 @@ cfg.mesh_n_max_samples = 1_000_000
 cfg.model = SimpleNamespace()
 
 cfg.model.network_config = {
-    "otype": "FullyFusedMLP",
-    "activation": "LeakyReLU",
+    "otype": "CutlassMLP",
+    "activation": "Sine",
     "output_activation": "None",
     "n_neurons": 128,
     "n_hidden_layers": 4,
@@ -61,12 +61,15 @@ cfg.model.network_config = {
 #cfg.model.encoding_type = "3d"
 cfg.model.encoding_type = "3d+1"
 
+# Can be 'HashGrid' or 'RBF'
+cfg.model.encoding = "RBF"
+
 # for 3d point encoding
 cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
     "n_features_per_level": 4,
-    "log2_hashmap_size": 16,
+    "log2_hashmap_size": 14,
     # "base_resolution": 16,
     "base_resolution": 16,
     "per_level_scale": 2,
@@ -96,15 +99,15 @@ cfg.model.direction_encoding_config = {
 cfg.train = SimpleNamespace()
 
 # each epoch contains <cfg.train.sample_size> rays
-cfg.train.sample_size = 100_000
-cfg.train.epochs = 500_000
+cfg.train.sample_size = 10_000
+cfg.train.epochs = 100_000
 
 cfg.train.learning_rate = 1e-3
 cfg.train.learning_rate_scheduler_min = 1.0
-# cfg.train.learning_rate_scheduler_min = 0.1
+#cfg.train.learning_rate_scheduler_min = 0.1
 
 # can be 'EMA' or 'SWA', other strings mean that no averaged model used
-cfg.train.use_averaged_model = 'EMA'
+cfg.train.use_averaged_model = None
 #cfg.train.use_averaged_model = None
 cfg.train.ema_decay = 0.999
 cfg.train.swa_learing_rate = 1e-3
@@ -116,7 +119,7 @@ cfg.train.model_start_checkpoint = None
 # path where checkpoint will be saved during training
 cfg.train.model_save_checkpoint = None
 cfg.train.checkpoints_path = "checkpoints"
-cfg.train.evaluation_interval = 10000
+cfg.train.evaluation_interval = 500
 
 # tensorboard logging
 cfg.train.tensorboard = True
@@ -148,7 +151,7 @@ cfg.visualization.inner_mesh_preview_name = "inner_preview.png"
 # cfg.visualization.camera_angle = 135
 cfg.visualization.camera_angle = 0
 
-cfg.visualization.use_neural_renderer = True
+cfg.visualization.use_neural_renderer = False
 cfg.visualization.neural_renderer_path = "/mnt/Programming/RenderingProjects/neural-renderer/build/evaluate"
 cfg.visualization.config_json_path = "configs/chess.json"
 cfg.visualization.tmp_config_json_path = "/tmp/config.json"

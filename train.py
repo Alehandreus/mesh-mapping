@@ -120,11 +120,29 @@ def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
         input_exit_points[~inner_apply] = x_outer_exit[~inner_apply]
         input_directions = ds_left
 
-        pred_intersection, pred_t, pred_normal, pred_colors = model(
-            input_enter_points,
-            input_exit_points,
-            input_directions,
-        )
+        input_enter_points_batches = torch.split(input_enter_points, 1000, dim=0)
+        input_exit_points_batches = torch.split(input_exit_points, 1000, dim=0)
+        input_directions_batches = torch.split(input_directions, 1000, dim=0)
+        pred_intersection_list = []
+        pred_t_list = []
+        pred_normal_list = []
+        pred_colors_list = []
+        for input_enter_points, input_exit_points, input_directions in zip(input_enter_points_batches, input_exit_points_batches, input_directions_batches):
+            pred_intersection, pred_t, pred_normal, pred_colors = model(
+                input_enter_points,
+                input_exit_points,
+                input_directions,
+            )
+            pred_intersection_list.append(pred_intersection)
+            pred_t_list.append(pred_t)
+            pred_normal_list.append(pred_normal)
+            pred_colors_list.append(pred_colors)
+        
+        pred_intersection = torch.cat(pred_intersection_list, dim=0)
+        pred_t = torch.cat(pred_t_list, dim=0)
+        pred_normal = torch.cat(pred_normal_list, dim=0)
+        pred_colors = torch.cat(pred_colors_list, dim=0)
+
         pred_intersection_mask = (pred_intersection >= 0)
         pred_intersection_mask[x_inner_mask & (x_inner_t < x_outer_exit_t)] = True
         # pred_intersection_mask = pred_intersection_mask | True
@@ -195,7 +213,9 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
     for epoch in progress:
         model.train()
         #x, normals = sample_sphere_torch(radius + 0.1, center, cfg.train.sample_size, cfg.device)
-        x, normals, _ = sample_points(outer_mesh.sampler, cfg.train.sample_size, cfg.device)
+        x, normals, _ = sample_points(outer_mesh.sampler, cfg.train.sample_size, 'cuda')
+        x = x.to(cfg.device)
+        normals = normals.to(cfg.device)
         ds = sample_directions_torch(normals, cfg.device)
 
         gt_intersection_mask_all = []
@@ -342,7 +362,7 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         flip = 0
         info = ""
         if epoch % cfg.train.evaluation_interval == cfg.train.evaluation_interval - 1:
-            save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step)
+            #save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step)
             if cfg.visualization.use_neural_renderer:
                 psnr, flip = render_predictions_with_neural_renderer(cfg, run_name)
                 info += f"PSNR={psnr:.4f}, FLIP={flip:.4f}, "
@@ -395,7 +415,8 @@ def main(cfg):
         f"{cfg.visualization.preview_path}/{cfg.visualization.inner_mesh_preview_name}": inner_mesh.mesh,
     }, cfg.visualization.image_size)
 
-    model = RayModel(model_config, outer_mesh.mesh).to(cfg.device)
+    # For RBF encoding their mesh representation and device are needed, so I passed cfg (i hope will be fixed in future)
+    model = RayModel(model_config, outer_mesh.mesh, cfg).to(cfg.device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.train.learning_rate)
     learing_rate_scheduler = CosineAnnealingLR(

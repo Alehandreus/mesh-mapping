@@ -39,7 +39,8 @@ def render_predictions(cfg, points, predicted_points, cam_poses, normals_traced,
 
     if predicted_points.numel() > 0:
         predicted_distance = (predicted_points - cam_poses[whole_intersected_mask]).norm(dim=1)
-        predicted_distance = prepare_distance(predicted_distance)
+        if not torch.isnan(predicted_distance).any():
+            predicted_distance = prepare_distance(predicted_distance)
     else:
         predicted_distance = torch.tensor([], device=cfg.device)
     path = f"{cfg.visualization.render_path}/{cfg.visualization.predicted_distance_render_name}"
