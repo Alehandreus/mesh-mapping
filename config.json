@@ -1,0 +1,37 @@
+{
+    "scale": 100,
+    "fine_mesh_path": "/home/me/brain/ijcai2026/dbrt_data/chess/meshes/chess.glb",
+    "outer_mesh_path": "/home/me/brain/ijcai2026/dbrt_data/chess/meshes/chess_outer_10000.obj",
+    "inner_mesh_path": "/home/me/brain/ijcai2026/dbrt_data/chess/meshes/chess_inner_5000.obj",
+    "model": {
+        "network_config": {
+            "otype": "FullyFusedMLP",
+            "activation": "LeakyReLU",
+            "output_activation": "None",
+            "n_neurons": 128,
+            "n_hidden_layers": 4
+        },
+        "point_encoding_config": {
+            "otype": "HashGrid",
+            "n_levels": 8,
+            "n_features_per_level": 4,
+            "log2_hashmap_size": 10,
+            "base_resolution": 16,
+            "per_level_scale": 2,
+            "fixed_point_pos": false
+        }
+    },
+    "train": {
+        "sample_size": 100000,
+        "epochs": 20000,
+        "learning_rate": 0.001,
+        "learning_rate_scheduler_min": 1.0,
+        "learning_rate_scheduler_total_iters": 50000,
+        "checkpoints_path": "/home/me/brain/mesh-mapping/new_checkpoints",
+        "evaluate": false,
+        "tensorboard": false,
+        "run_name": "benchmark_dbrt_2",
+        "save_pt": false,
+        "save_bin": true
+    }
+}

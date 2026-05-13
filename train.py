@@ -1,6 +1,5 @@
 import os
 import json
-from pathlib import Path
 import numpy as np
 import torch
 import torch.autograd as autograd
@@ -13,7 +12,7 @@ import copy
 from tqdm import tqdm
 from utils import MeshWrapper, sample_directions_torch, sample_sphere_torch, get_camera_rays
 from visualization import save_mesh_previews, render_predictions, render_predictions_with_neural_renderer
-
+import sys
 from models import RayModel
 import time
 
@@ -34,29 +33,6 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 
-def apply_json_config(cfg):
-    if cfg.json_config_path is None:
-        return
-    json_path = Path(cfg.json_config_path)
-    base_dir = json_path.parent.resolve()
-    with open(json_path, "r", encoding="utf-8") as f:
-        jcfg = json.load(f)
-
-    scene = jcfg.get("scene", {})
-    cfg.fine_mesh_path  = str((base_dir / scene["original_mesh"]["path"]).resolve())
-    cfg.outer_mesh_path = str((base_dir / scene["outer_shell"]["path"]).resolve())
-    cfg.inner_mesh_path = str((base_dir / scene["inner_shell"]["path"]).resolve())
-
-    nn_cfg = jcfg.get("neural_network", {})
-    if "base_resolution" in nn_cfg:
-        cfg.model.point_encoding_config["base_resolution"] = nn_cfg["base_resolution"]
-    if "log2_hashmap_size" in nn_cfg:
-        cfg.model.point_encoding_config["log2_hashmap_size"] = nn_cfg["log2_hashmap_size"]
-
-    weights = jcfg.get("training", {}).get("loss_weights", {})
-    if weights:
-        cfg.train.loss_weights.update(weights)
-
 
 def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step):
     checkpoint_data = {
@@ -74,17 +50,17 @@ def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, schedul
         copy_model = copy.deepcopy(model)
 
     copy_model.half()
-    torch.save(copy_model.state_dict(), f"{cfg.train.checkpoints_path}/{run_name}_half.pt")
-    
-    checkpoint_name = f"{cfg.train.checkpoints_path}/{run_name}.pt"
-    torch.save(checkpoint_data, checkpoint_name)
 
-    #if copy_model.model_config.encoding_type == "3d":
-    point_encoding_params = copy_model.point_encoding.params.data.cpu().numpy().astype(np.float16)
-    direction_encoding_params = copy_model.direction_encoding.params.data.cpu().numpy().astype(np.float16)
-    network_params = copy_model.network.params.data.cpu().numpy().astype(np.float16)
-    total_params = np.concatenate([point_encoding_params, direction_encoding_params, network_params])
-    total_params.tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
+    if cfg.train.save_pt:
+        torch.save(copy_model.state_dict(), f"{cfg.train.checkpoints_path}/{run_name}_half.pt")
+        torch.save(checkpoint_data, f"{cfg.train.checkpoints_path}/{run_name}.pt")
+
+    if cfg.train.save_bin:
+        point_encoding_params = copy_model.point_encoding.params.data.cpu().numpy().astype(np.float16)
+        direction_encoding_params = copy_model.direction_encoding.params.data.cpu().numpy().astype(np.float16)
+        network_params = copy_model.network.params.data.cpu().numpy().astype(np.float16)
+        total_params = np.concatenate([point_encoding_params, direction_encoding_params, network_params])
+        total_params.tofile(f"{cfg.train.checkpoints_path}/{run_name}.bin")
 
 
 @torch.no_grad()
@@ -391,28 +367,6 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
                 + normal_loss * w["normal_loss"]
                 + color_loss * w["color_loss"]
                 + distance_loss * w["distance_loss"] * cfg.scale)
-        
-        # if epoch % 100 == 0:
-        #     # plot loss wrt dot(ds, gt_normals) to check if model struggles more with grazing rays
-        #     with torch.no_grad():
-        #         # dot = (input_directions * gt_normals).sum(dim=1)
-        #         # dot = dot / (input_directions.norm(dim=1) * gt_normals.norm(dim=1) + 1e-8)
-        #         dot = F.cosine_similarity(input_directions, gt_normals, dim=1)
-        #         import matplotlib.pyplot as plt
-        #         plt.figure(figsize=(10, 5))
-        #         plt.subplot(1, 2, 1)
-        #         plt.scatter(dot[gt_intersection_mask].cpu(), (predicted_normals.float() - gt_normals.float()).abs().sum(dim=-1)[gt_intersection_mask].cpu(), alpha=0.1)
-        #         plt.xlabel("dot(ray_direction, normal)")
-        #         plt.ylabel("predicted_normal - gt_normal")
-        #         plt.title("normal error vs angle")
-        #         plt.subplot(1, 2, 2)
-        #         plt.scatter(dot[gt_intersection_mask].cpu(), (predicted_t[gt_intersection_mask] - gt_distance[gt_intersection_mask] / cfg.scale).abs().cpu(), alpha=0.1)
-        #         plt.xlabel("dot(ray_direction, normal)")
-        #         plt.ylabel("predicted_t - gt_distance")
-        #         plt.title("Distance error vs angle")
-        #         plt.tight_layout()
-        #         plt.savefig(f"output.png")
-        #         plt.close()
 
         optimizer.zero_grad()
         loss.backward()
@@ -432,12 +386,13 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
         info = ""
         if epoch % cfg.train.evaluation_interval == cfg.train.evaluation_interval - 1:
             save_checkpoint(cfg, model_config, model, averaged_model, optimizer, scheduler, run_name, step)
-            if cfg.visualization.use_neural_renderer:
-                psnr, flip = render_predictions_with_neural_renderer(cfg, run_name)
-                info += f"PSNR={psnr:.4f}, FLIP={flip:.4f}, "
-            else:
-                mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, averaged_model)
-                info += f"MSE={mse:.6f}, PSNR={psnr:.4f}, "
+            if cfg.train.evaluate:
+                if cfg.visualization.use_neural_renderer:
+                    psnr, flip = render_predictions_with_neural_renderer(cfg, run_name)
+                    info += f"PSNR={psnr:.4f}, FLIP={flip:.4f}, "
+                else:
+                    mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, averaged_model)
+                    info += f"MSE={mse:.6f}, PSNR={psnr:.4f}, "
             info += f"dist={distance_loss.item():.4f}, entr={cls_loss.item():.4f}, norm={normal_loss.item():.4f}, clr={color_loss.item():.4f}, total={loss.item():.4f}"
         if info != "":
             progress.set_postfix_str(info)
@@ -462,8 +417,6 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
 
 
 def main(cfg):
-    apply_json_config(cfg)
-
     if cfg.train.model_start_checkpoint:
         checkpoint = torch.load(cfg.train.model_start_checkpoint, weights_only=False)
         model_config = checkpoint["model_config"]
@@ -517,9 +470,9 @@ def main(cfg):
     
     writer = None
     run_name = f"run_{int(time.time())}"
+    if cfg.train.run_name:
+            run_name = cfg.train.run_name
     if cfg.train.tensorboard:
-        if cfg.train.tensorboard_run_name:
-            run_name = cfg.train.tensorboard_run_name
         writer = SummaryWriter(f"{cfg.train.tensorboard_path}/{run_name}")
 
     model = train_model(
@@ -529,10 +482,43 @@ def main(cfg):
         writer, model_config, run_name, step
     )
 
-    eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model)
     save_checkpoint(cfg, model_config, model, averaged_model, optimizer, learing_rate_scheduler, run_name, cfg.train.epochs)
     
 
 if __name__ == "__main__":
     import config as cfg_module
-    main(cfg_module.cfg)
+    cfg = cfg_module.cfg
+
+    """
+    apply override
+    expect json of format
+
+    {
+        "scale": 100,
+        "fine_mesh_path": "models/foo.fbx",
+        "model": {
+            "network_config": {"n_neurons": 64}
+        },
+        "train": {
+            "run_name": "my_run",
+            "checkpoints_path": "checkpoints"
+        }
+    }
+    """
+
+    if len(sys.argv) > 1:
+        print(f"Applying overrides from {sys.argv[1]}...")
+        with open(sys.argv[1]) as f:
+            overrides = json.load(f)
+        def apply_overrides(ns, d):
+            for key, val in d.items():
+                if isinstance(val, dict) and hasattr(ns, key) and not isinstance(getattr(ns, key), dict):
+                    apply_overrides(getattr(ns, key), val)
+                else:
+                    setattr(ns, key, val)
+        apply_overrides(cfg, overrides)
+
+    print("Configuration:")
+    print(cfg)
+
+    main(cfg)

@@ -6,14 +6,6 @@ cfg = SimpleNamespace()
 cfg.device = "cuda"
 cfg.scale = 100
 
-# Path to a scene JSON config (e.g. from cuda-rendering/dbrt_data/).
-# If not None, mesh paths and neural network hash grid parameters are overridden from the JSON.
-cfg.json_config_path = None
-# cfg.json_config_path = "cuda-rendering/dbrt_data/chess/configs/chess_out10k_in5k_hg14.json"
-# cfg.json_config_path = "cuda-rendering/dbrt_data/exhibition/configs/exhibition.json"
-# cfg.json_config_path = "cuda-rendering/dbrt_data/andalusian/configs/andalusian.json"
-# cfg.json_config_path = "cuda-rendering/dbrt_data/statuette/configs/statuette.json"
-
 # cfg.fine_mesh_path = "models/superdragon_orig.obj"
 # cfg.outer_mesh_path = "models/superdragon_outer_5000_uv.obj"
 # cfg.inner_mesh_path = "models/superdragon_inner_5000.obj"
@@ -70,16 +62,14 @@ cfg.model = SimpleNamespace()
 
 cfg.model.network_config = {
     "otype": "FullyFusedMLP",
-    # "otype": "CutlassMLP",
     "activation": "LeakyReLU",
     "output_activation": "None",
     "n_neurons": 128,
     "n_hidden_layers": 4,
 }
 
-# cfg.model.encoding_type = "2d"
-cfg.model.encoding_type = "3d"
-# cfg.model.encoding_type = "3d+1"
+# cfg.model.encoding_type = "3d"
+cfg.model.encoding_type = "3d+1"
 
 # for 3d point encoding
 cfg.model.point_encoding_config = {
@@ -87,18 +77,6 @@ cfg.model.point_encoding_config = {
     "n_levels": 8,
     "n_features_per_level": 4,
     "log2_hashmap_size": 10,
-    # "base_resolution": 16,
-    "base_resolution": 16,
-    "per_level_scale": 2,
-    "fixed_point_pos": False,
-}
-
-# for 2d uv encoding
-cfg.model.uv_encoding_config = {
-    "otype": "HashGrid",
-    "n_levels": 8,
-    "n_features_per_level": 4,
-    "log2_hashmap_size": 14,
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
@@ -138,12 +116,15 @@ cfg.train.model_start_checkpoint = None
 cfg.train.model_save_checkpoint = None
 cfg.train.checkpoints_path = "checkpoints"
 cfg.train.evaluation_interval = 5000
+cfg.train.evaluate = True
+cfg.train.save_pt = True
+cfg.train.save_bin = True
 
 # tensorboard logging
 cfg.train.tensorboard = True
 cfg.train.tensorboard_path = "runs"
 # cfg.train.tensorboard_run_name = "chess_out10k_in5k_hg14"
-cfg.train.tensorboard_run_name = None
+cfg.train.run_name = None
 
 cfg.train.loss_weights = {
     "cls_loss": 0.1,

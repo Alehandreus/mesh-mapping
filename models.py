@@ -16,25 +16,12 @@ class RayModel(nn.Module):
 
         self.network_config = model_config.network_config
         self.point_encoding_config = model_config.point_encoding_config
-        self.uv_encoding_config = model_config.uv_encoding_config
         self.direction_encoding_config = model_config.direction_encoding_config
-
-        print("point_encoding_config:", self.point_encoding_config)
-        print("network_config:", self.network_config)
 
         # output dimentions of mlp head: presence of intersection (1), distance (1), normal (3) and color (3)
         self.n_output_dims = 8
 
-        self.direction_encoding = tcnn.Encoding(3, self.direction_encoding_config)
-        # self.direction_encoding = tcnn.Encoding(2, {
-        #     "otype": "HashGrid",
-        #     "n_levels": 8,
-        #     "n_features_per_level": 4,
-        #     "log2_hashmap_size": 16,
-        #     "base_resolution": 16,
-        #     "per_level_scale": 2,
-        #     "fixed_point_pos": False,
-        # })        
+        self.direction_encoding = tcnn.Encoding(3, self.direction_encoding_config)   
 
         if model_config.encoding_type == "3d":
             self.point_encoding = tcnn.Encoding(3, self.point_encoding_config)
@@ -48,13 +35,6 @@ class RayModel(nn.Module):
     def forward(self, points, points_inner, directions, return_emb=False, inject_emb=None, *args, **kwargs):
         directions = (directions + 1) / 2
         directions_enc = self.direction_encoding(directions).float()
-
-        #### direction encoding ####
-
-        # theta = torch.atan2(directions[:, 1], directions[:, 0]) / (2 * torch.pi) + 0.5
-        # phi = torch.acos(directions[:, 2]) / torch.pi
-        # uv = torch.stack([theta, phi], dim=1)
-        # directions_enc = self.direction_encoding(uv).float() * 0
 
         if self.model_config.encoding_type == "3d":
             points = (points - self.mesh_min) / (self.mesh_max - self.mesh_min)
