@@ -36,7 +36,7 @@ class RBFencoding(rbf):
                 rbf_lc0_normalize, pe_freqs, pe_lc0_freq, pe_hg0_freq,
                 pe_lc0_rbf_freq, pe_lc0_rbf_keep, **kwargs)
         
-        self.n_output_dims = n_hidden_fl
+        self.n_output_dims = n_hidden_fl + num_levels * level_dim
         self.use_train_knn = False
     
     def forward(self, x_g, point_idx=None, **kwargs):
@@ -90,6 +90,7 @@ class RayModel(nn.Module):
         super().__init__()
 
         self.model_config = model_config
+        self.scale = cfg.scale
 
         mesh_min, mesh_max = mesh.get_bounds()
         self.mesh_min = nn.Parameter(torch.tensor(mesh_min, dtype=torch.float32), requires_grad=False)
@@ -110,6 +111,13 @@ class RayModel(nn.Module):
         elif model_config.encoding == "RBF":
             opt = sdf.config
             gt_mesh = trimesh.load(cfg.fine_mesh_path, force='mesh')
+            #print(gt_mesh.vertices)
+            print(mesh_min)
+            print(mesh_max)
+            gt_mesh.vertices = (gt_mesh.vertices * cfg.scale - mesh_min) / (mesh_max - mesh_min)
+            #print(gt_mesh.vertices)
+            #gt_mesh.faces_sparse
+            #gt_mesh.apply_scale(1 / (mesh_max - mesh_min))
             print(f"[INFO] mesh: {gt_mesh.vertices.shape} {gt_mesh.faces.shape} {cfg.fine_mesh_path}")
 
             opt.cmax = [1, 1, 1]  # ... y x
@@ -157,39 +165,43 @@ class RayModel(nn.Module):
             self.mlp_input_dims = self.point_encoding.n_output_dims * 3 + self.direction_encoding.n_output_dims
         
         self.network = tcnn.Network(self.mlp_input_dims, self.n_output_dims, self.network_config)
-        self.omega_0 = 1
+        '''self.omega_0 = 1
         with torch.no_grad():
             print(self.network.params.data.shape)
             self.network.params.data[:30720].uniform_(-1 / self.mlp_input_dims, 
                                              1 / self.mlp_input_dims)
             self.network.params.data[30720:].uniform_(-(6 / self.mlp_input_dims) ** 0.5 / self.omega_0, 
-                                             (6 / self.mlp_input_dims) ** 0.5 / self.omega_0)
+                                             (6 / self.mlp_input_dims) ** 0.5 / self.omega_0)'''
+        
+        #self.point_encoding.ks0.weight.data /= 1000
 
     def forward(self, points, points_inner, directions, *args, **kwargs):
         directions = (directions + 1) / 2
         directions_enc = self.direction_encoding(directions).float()
 
-        if self.model_config.encoding_type == "3d":
-            points = (points - self.mesh_min) / (self.mesh_max - self.mesh_min)
-            points_enc = self.point_encoding(points).float()
+        #if self.model_config.encoding == "HashGrid":
+        points = (points - self.mesh_min) / (self.mesh_max - self.mesh_min)
+        points_inner = (points_inner - self.mesh_min) / (self.mesh_max - self.mesh_min)
+        #elif self.model_config.encoding == "RBF":
+        #points = points / self.scale
+        #points_inner = points_inner / self.scale
 
-            points_inner = (points_inner - self.mesh_min) / (self.mesh_max - self.mesh_min)
+
+        if self.model_config.encoding_type == "3d":
+            points_enc = self.point_encoding(points).float()
             points_inner_enc = self.point_encoding(points_inner).float()
 
             x = torch.cat([points_enc, points_inner_enc, directions_enc], dim=1)
 
         elif self.model_config.encoding_type == "3d+1":
-            points = (points - self.mesh_min) / (self.mesh_max - self.mesh_min)
             points_enc = self.point_encoding(points).float()
-
-            points_inner = (points_inner - self.mesh_min) / (self.mesh_max - self.mesh_min)
             points_inner_enc = self.point_encoding(points_inner).float()
 
             points_interp = (points + points_inner) / 2
             points_interp_enc = self.point_encoding(points_interp).float()
 
             x = torch.cat([points_enc, points_inner_enc, points_interp_enc, directions_enc], dim=1)    
-
+        #print(x.shape)
         y = self.network(x).float()
 
         # skip_mask = torch.norm(points - points_inner, dim=1) < 1e-3

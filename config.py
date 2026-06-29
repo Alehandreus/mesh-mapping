@@ -51,7 +51,7 @@ cfg.model = SimpleNamespace()
 
 cfg.model.network_config = {
     "otype": "CutlassMLP",
-    "activation": "Sine",
+    "activation": "ReLU",
     "output_activation": "None",
     "n_neurons": 128,
     "n_hidden_layers": 4,
@@ -69,7 +69,7 @@ cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
     "n_features_per_level": 4,
-    "log2_hashmap_size": 14,
+    "log2_hashmap_size": 16,
     # "base_resolution": 16,
     "base_resolution": 16,
     "per_level_scale": 2,
@@ -105,6 +105,7 @@ cfg.train.epochs = 100_000
 cfg.train.learning_rate = 1e-3
 cfg.train.learning_rate_scheduler_min = 1.0
 #cfg.train.learning_rate_scheduler_min = 0.1
+cfg.train.learning_rate_scheduler_total_iters = 10 * 5000
 
 # can be 'EMA' or 'SWA', other strings mean that no averaged model used
 cfg.train.use_averaged_model = None
@@ -119,12 +120,22 @@ cfg.train.model_start_checkpoint = None
 # path where checkpoint will be saved during training
 cfg.train.model_save_checkpoint = None
 cfg.train.checkpoints_path = "checkpoints"
-cfg.train.evaluation_interval = 500
+cfg.train.evaluation_interval = 5000
+cfg.train.evaluate = True
+cfg.train.save_pt = True
+cfg.train.save_bin = True
 
 # tensorboard logging
 cfg.train.tensorboard = True
 cfg.train.tensorboard_path = "runs"
-cfg.train.tensorboard_run_name = None
+cfg.train.run_name = None
+
+cfg.train.loss_weights = {
+    "cls_loss": 0.1,
+    "normal_loss": 1.0,
+    "color_loss": 10.0,
+    "distance_loss": 0.01,
+}
 
 
 # VISUALIZATION #

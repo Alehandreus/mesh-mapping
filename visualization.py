@@ -9,7 +9,7 @@ from PIL import Image
 def save_mesh_previews(meshes, size):
     """Save simple previews for a collection of PyMesh objects keyed by name."""
     for name, mesh in meshes.items():
-        mesh.save_preview(name, size, size, mesh.get_c(), mesh.get_R())
+        mesh.save_preview(name, size, size)
 
 @torch.no_grad()
 def render_image(data, mask, image_size, path, device):
