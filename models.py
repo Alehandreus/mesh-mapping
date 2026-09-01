@@ -124,7 +124,6 @@ class RayModel(nn.Module):
             opt.cmin = [-i for i in opt.cmax]  # ... y x
             s_dims = [opt.val_resolution] * 3
             n_train_point = opt.train_num_samples * opt.train_epoch_size
-            desired_resolution=opt.desired_resolution
             in_dim = 3
             out_dim = 1
             opt.vmin = -(2**2*3)**0.5
@@ -135,18 +134,29 @@ class RayModel(nn.Module):
 
             s_dims = [opt.val_resolution] * 3
 
+            rbf_type = self.point_encoding_config["rbf_type"]
+            rbf_lc0_normalize = self.point_encoding_config["rbf_lc0_normalize"]
+            n_kernel = self.point_encoding_config["n_kernel"]
+            point_nn_kernel = self.point_encoding_config["point_nn_kernel"]
+
+            num_levels = self.point_encoding_config["num_levels"]
+            level_dim = self.point_encoding_config["level_dim"]
+            log2_hashmap_size = self.point_encoding_config["log2_hashmap_size"]
+            base_resolution = self.point_encoding_config["base_resolution"]
+            desired_resolution = self.point_encoding_config["desired_resolution"] 
+
             #out_dim is garbage here
             self.point_encoding = RBFencoding(opt.cmin, opt.cmax, s_dims, in_dim=3, out_dim=8, 
             num_layers=opt.num_layers, hidden_dim=opt.hidden_dim, n_hidden_fl=opt.n_hidden_fl, 
             num_levels_ref=opt.num_levels_ref, level_dim_ref=opt.level_dim_ref, 
             base_resolution_ref=opt.base_resolution_ref, log2_hashmap_size_ref=opt.log2_hashmap_size_ref, 
-            num_levels=opt.num_levels, level_dim=opt.level_dim, base_resolution=opt.base_resolution,
-            log2_hashmap_size=opt.log2_hashmap_size, desired_resolution=desired_resolution, 
-            rbf_type=opt.rbf_type, n_kernel=opt.n_kernel, point_nn_kernel=opt.point_nn_kernel, ks_alpha=opt.ks_alpha, 
+            num_levels=num_levels, level_dim=level_dim, base_resolution=base_resolution,
+            log2_hashmap_size=log2_hashmap_size, desired_resolution=desired_resolution, 
+            rbf_type=rbf_type, n_kernel=n_kernel, point_nn_kernel=point_nn_kernel, ks_alpha=opt.ks_alpha, 
             lc_init=opt.lc_init, lcb_init=opt.lcb_init, 
             w_init=opt.w_init, b_init=opt.b_init, a_init=opt.a_init,
             sparse_embd_grad=False, act=opt.act, lc_act=opt.lc_act, rbf_suffixes=opt.rbf_suffixes, 
-            kc_init_config=opt.kc_init_config, rbf_lc0_normalize=opt.rbf_lc0_normalize, 
+            kc_init_config=opt.kc_init_config, rbf_lc0_normalize=rbf_lc0_normalize, 
             pe_freqs=opt.pe_freqs, pe_lc0_freq=opt.pe_lc0_freq, pe_hg0_freq=opt.pe_hg0_freq,
             pe_lc0_rbf_freq=opt.pe_lc0_rbf_freq, pe_lc0_rbf_keep=opt.pe_lc0_rbf_keep)
             

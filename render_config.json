@@ -1,0 +1,80 @@
+{
+    "path": "comparison-rbf/experiments",
+    "scenes": [
+        {
+            "name": "chess",
+            "fine_mesh_path": "models/chess_orig.obj",
+            "outer_mesh_path": "models/chess_outer_10000_minconst.obj",
+            "inner_mesh_path": "models/chess_inner_10000.obj",
+            "scale": 10,
+            "model_versions": [
+                {
+                    "weights_path": "comparison-rbf/run_1782665985/run_1782665985.bin",
+                    "name": "rbf20000_hashgrid15",
+                    "config": {
+                        "network_config": {
+                            "otype": "CutlassMLP",
+                            "activation": "ReLU",
+                            "output_activation": "None",
+                            "n_neurons": 128,
+                            "n_hidden_layers": 4
+                        },
+                        "encoding_type": "3d+1",
+                        "encoding": "RBF",
+
+                        "uv_encoding_config": {
+                            "otype": "HashGrid",
+                            "n_levels": 8,
+                            "n_features_per_level": 4,
+                            "log2_hashmap_size": 14,
+                            "base_resolution": 16,
+                            "per_level_scale": 2,
+                            "fixed_point_pos": false
+                        },
+
+                        "direction_encoding_config": {
+                            "otype": "SphericalHarmonics", 
+                            "degree": 4  
+                        },
+
+                        "point_encoding_config": {
+                            "rbf_type": "nlin_s",
+                            "rbf_lc0_normalize": true,
+                            "n_kernel": 20000,
+                            "point_nn_kernel": 8,
+
+                            "num_levels": 8,
+                            "level_dim": 4,
+                            "log2_hashmap_size": 15,
+                            "base_resolution": 16,
+                            "desired_resolution": 2048
+                        }
+                    }
+                }
+            ],
+            "cameras": [
+                {
+                    "matrix": [
+                    0.28359198570251465,
+                    -0.5326340198516846,
+                    0.7974169850349426,
+                    0.0,
+                    0.0,
+                    0.8315569758415222,
+                    0.5554370284080505,
+                    0.0,
+                    -0.9589440226554871,
+                    -0.15751700103282928,
+                    0.23582300543785095,
+                    0.0,
+                    0.00184299994725734,
+                    0.050255998969078064,
+                    -0.7192429900169373,
+                    1.0
+                    ],
+                    "yfov": 0.7853981633974483
+                }
+            ]
+        }
+    ]
+}

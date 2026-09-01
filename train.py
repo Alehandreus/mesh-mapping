@@ -75,10 +75,10 @@ def save_checkpoint(cfg, model_config, model, averaged_model, optimizer, schedul
 
 
 @torch.no_grad()
-def eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, model):
+def eval_model(cfg, cam_poses, ds, fine_mesh, outer_mesh, inner_mesh, model):
     model.eval()
 
-    cam_poses, ds = get_camera_rays(fine_mesh.mesh, img_size=cfg.visualization.image_size, device=cfg.device, distance_scale=1.0, angle=cfg.visualization.camera_angle)
+    #cam_poses, ds = get_camera_rays(fine_mesh.mesh, img_size=cfg.visualization.image_size, device=cfg.device, distance_scale=1.0, angle=cfg.visualization.camera_angle)
     ds = ds / ds.norm(dim=1, keepdim=True)
 
     x_orig_mask, x_orig_t, x_orig_normals, _, colors, *_ = fine_mesh.ray_tracer.trace(cam_poses, ds, allow_negative=False)
@@ -395,7 +395,8 @@ def train_model(cfg, fine_mesh, outer_mesh, inner_mesh, model, averaged_model, o
                     psnr, flip = render_predictions_with_neural_renderer(cfg, run_name)
                     info += f"PSNR={psnr:.4f}, FLIP={flip:.4f}, "
                 else:
-                    mse, psnr, accuracy = eval_model(cfg, fine_mesh, outer_mesh, inner_mesh, averaged_model)
+                    cam_poses, ds = get_camera_rays(fine_mesh.mesh, img_size=cfg.visualization.image_size, device=cfg.device, distance_scale=1.0, angle=cfg.visualization.camera_angle)
+                    mse, psnr, accuracy = eval_model(cfg, cam_poses, ds, fine_mesh, outer_mesh, inner_mesh, averaged_model)
                     info += f"MSE={mse:.6f}, PSNR={psnr:.4f}, "
             info += f"dist={distance_loss.item():.4f}, entr={cls_loss.item():.4f}, norm={normal_loss.item():.4f}, clr={color_loss.item():.4f}, total={loss.item():.4f}"
         if info != "":

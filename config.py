@@ -65,7 +65,7 @@ cfg.model.encoding_type = "3d+1"
 cfg.model.encoding = "RBF"
 
 # for 3d point encoding
-cfg.model.point_encoding_config = {
+'''cfg.model.point_encoding_config = {
     "otype": "HashGrid",
     "n_levels": 8,
     "n_features_per_level": 4,
@@ -74,7 +74,7 @@ cfg.model.point_encoding_config = {
     "base_resolution": 16,
     "per_level_scale": 2,
     "fixed_point_pos": False,
-}
+}'''
 
 # for 2d uv encoding
 cfg.model.uv_encoding_config = {
@@ -91,6 +91,20 @@ cfg.model.uv_encoding_config = {
 cfg.model.direction_encoding_config = {
     "otype": "SphericalHarmonics", 
     "degree": 4  
+}
+
+# for rbf encoding (really hybrid of rbf and hashgrid)
+cfg.model.point_encoding_config = {
+    "rbf_type": "nlin_s",
+    "rbf_lc0_normalize": True,
+    "n_kernel": 2000 * 10,
+    "point_nn_kernel": 8,
+
+    "num_levels": 8, #Hashgrid включает и отключает это!!!
+    "level_dim": 4,
+    "log2_hashmap_size": 15,
+    "base_resolution": 16,
+    "desired_resolution": 2048
 }
 
 
@@ -120,13 +134,13 @@ cfg.train.model_start_checkpoint = None
 # path where checkpoint will be saved during training
 cfg.train.model_save_checkpoint = None
 cfg.train.checkpoints_path = "checkpoints"
-cfg.train.evaluation_interval = 5000
+cfg.train.evaluation_interval = 500
 cfg.train.evaluate = True
 cfg.train.save_pt = True
 cfg.train.save_bin = True
 
 # tensorboard logging
-cfg.train.tensorboard = True
+cfg.train.tensorboard = False
 cfg.train.tensorboard_path = "runs"
 cfg.train.run_name = None
 
